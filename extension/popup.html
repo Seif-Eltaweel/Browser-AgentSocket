@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Agent Bro Hands</title>
+  <style>
+    body { 
+      width: 380px; 
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
+      padding: 16px; 
+      background: linear-gradient(135deg, #0f0c1b 0%, #1e1136 100%); 
+      color: #F3F1F8; 
+      margin: 0;
+      overflow-x: hidden;
+      box-sizing: border-box;
+    }
+    .header { 
+      display: flex; 
+      align-items: center; 
+      justify-content: space-between; 
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1); 
+      padding-bottom: 12px; 
+      margin-bottom: 16px; 
+    }
+    .title { 
+      font-size: 16px; 
+      font-weight: 800; 
+      color: #D3B9FF; 
+      letter-spacing: 0.5px;
+      text-shadow: 0 0 10px rgba(187, 134, 252, 0.3);
+    }
+    .status-container { 
+      display: flex; 
+      align-items: center; 
+      justify-content: space-between; 
+      margin-bottom: 16px; 
+      font-size: 13px;
+      background: rgba(255, 255, 255, 0.03);
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .control-label {
+      color: #A69EBA;
+    }
+    .btn { 
+      width: 100%; 
+      padding: 10px; 
+      border: none; 
+      border-radius: 8px; 
+      font-weight: 700; 
+      font-size: 13px;
+      cursor: pointer; 
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); 
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+      box-sizing: border-box;
+    }
+    .btn:active {
+      transform: scale(0.97);
+    }
+    .btn-takeover { 
+      background: linear-gradient(90deg, #ea4335 0%, #c5221f 100%); 
+      color: white; 
+    }
+    .btn-takeover:hover {
+      background: linear-gradient(90deg, #f05244 0%, #d93025 100%); 
+      box-shadow: 0 6px 16px rgba(234, 67, 53, 0.4);
+    }
+    .btn-resume { 
+      background: linear-gradient(90deg, #34a853 0%, #248a3d 100%); 
+      color: white; 
+      margin-top: 8px; 
+    }
+    .btn-resume:hover {
+      background: linear-gradient(90deg, #41be62 0%, #2d9247 100%); 
+      box-shadow: 0 6px 16px rgba(52, 168, 83, 0.4);
+    }
+    .status-tag { 
+      padding: 6px 10px; 
+      border-radius: 6px; 
+      font-size: 9px; 
+      font-weight: 800; 
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    }
+    .status-auto { 
+      background: rgba(52, 168, 83, 0.12); 
+      color: #34A853; 
+      border: 1px solid rgba(52, 168, 83, 0.3);
+      box-shadow: 0 0 10px rgba(52, 168, 83, 0.2);
+    }
+    .status-manual { 
+      background: rgba(234, 67, 53, 0.12); 
+      color: #EA4335; 
+      border: 1px solid rgba(234, 67, 53, 0.3);
+      box-shadow: 0 0 10px rgba(234, 67, 53, 0.2);
+    }
+    .context-box { 
+      display: none; 
+      margin-bottom: 16px;
+      animation: slideDown 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .context-box.active { 
+      display: block; 
+    }
+    textarea { 
+      width: 100%; 
+      box-sizing: border-box; 
+      background: rgba(25, 18, 41, 0.6); 
+      color: #FFFFFF; 
+      border: 1px solid rgba(255, 255, 255, 0.1); 
+      border-radius: 8px; 
+      padding: 10px; 
+      resize: none; 
+      font-family: inherit; 
+      font-size: 12px; 
+      line-height: 1.5;
+      transition: all 0.2s;
+    }
+    textarea:focus { 
+      border-color: #B194FF; 
+      box-shadow: 0 0 8px rgba(177, 148, 255, 0.3);
+      outline: none; 
+      background: rgba(25, 18, 41, 0.8);
+    }
+    label { 
+      font-size: 11px; 
+      color: #B2AABF; 
+      display: block; 
+      margin-bottom: 8px; 
+      font-weight: 500;
+    }
+
+    /* Agent Connection Panel Styles */
+    .section-title {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: #D3B9FF;
+      margin: 20px 0 10px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      padding-bottom: 6px;
+    }
+    .agent-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 12px;
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 8px;
+      margin-bottom: 8px;
+      transition: all 0.2s ease;
+    }
+    .agent-item:hover {
+      background: rgba(255, 255, 255, 0.04);
+      border-color: rgba(187, 134, 252, 0.2);
+    }
+    .agent-info {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex: 1;
+      min-width: 0;
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .status-dot.online {
+      background: #34A853;
+      box-shadow: 0 0 6px #34A853;
+    }
+    .status-dot.offline {
+      background: #EA4335;
+      box-shadow: 0 0 6px #EA4335;
+    }
+    .status-dot.disabled {
+      background: #777;
+    }
+    .agent-text {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+    .agent-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: #E2DDF0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .agent-url {
+      font-size: 10px;
+      color: #8A81A0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-top: 2px;
+    }
+    .agent-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    /* Color select box style */
+    .color-select {
+      background: rgba(25, 18, 41, 0.6);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 4px;
+      color: #E2DDF0;
+      font-size: 10px;
+      padding: 2px 4px;
+      cursor: pointer;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .color-select:focus {
+      border-color: #BB86FC;
+    }
+    
+    /* Toggle switch */
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 32px;
+      height: 18px;
+      flex-shrink: 0;
+    }
+    .switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: rgba(255,255,255,0.1);
+      transition: .3s;
+      border-radius: 18px;
+    }
+    .slider:before {
+      position: absolute;
+      content: "";
+      height: 14px;
+      width: 14px;
+      left: 2px;
+      bottom: 2px;
+      background-color: white;
+      transition: .3s;
+      border-radius: 50%;
+    }
+    input:checked + .slider {
+      background-color: #8b5cf6;
+    }
+    input:checked + .slider:before {
+      transform: translateX(14px);
+    }
+    .btn-edit {
+      background: none;
+      border: none;
+      color: #8A81A0;
+      cursor: pointer;
+      font-size: 12px;
+      padding: 2px;
+      transition: color 0.2s;
+    }
+    .btn-edit:hover {
+      color: #BB86FC;
+    }
+    
+    .actions-row {
+      display: flex;
+      gap: 12px;
+      margin-top: 12px;
+    }
+    
+    .btn-action-outline {
+      flex: 1;
+      background: rgba(187, 134, 252, 0.08);
+      border: 1px dashed rgba(187, 134, 252, 0.3);
+      color: #BB86FC;
+      padding: 8px;
+      font-size: 11px;
+      border-radius: 8px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.3s;
+      text-align: center;
+    }
+    .btn-action-outline:hover {
+      background: rgba(187, 134, 252, 0.15);
+      border-color: #BB86FC;
+    }
+    
+    .edit-form-panel {
+      background: rgba(255,255,255,0.02);
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      animation: slideDown 0.2s ease;
+    }
+    .edit-form-panel input {
+      background: rgba(25,18,41,0.5);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 4px;
+      color: white;
+      padding: 6px;
+      font-size: 11px;
+      outline: none;
+    }
+    .edit-form-panel input:focus {
+      border-color: #BB86FC;
+    }
+    .edit-form-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 6px;
+      margin-top: 4px;
+    }
+    .btn-small {
+      padding: 4px 10px;
+      font-size: 10px;
+      border-radius: 4px;
+      border: none;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    .btn-save {
+      background: #8b5cf6;
+      color: white;
+    }
+    .btn-cancel {
+      background: rgba(255,255,255,0.08);
+      color: #E2DDF0;
+      border: 1px solid rgba(255,255,255,0.05);
+    }
+    .btn-delete {
+      background: #ea4335;
+      color: white;
+      margin-right: auto;
+    }
+
+    @keyframes slideDown {
+      from { opacity: 0; transform: translateY(-8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="title">Agent Bro Hands</div>
+    <span id="statusTag" class="status-tag status-auto">AUTO ENGINE</span>
+  </div>
+  
+  <div class="status-container">
+    <span class="control-label">Control Mode:</span>
+    <span id="controlText" style="font-weight: bold; color: #34A853; text-shadow: 0 0 8px rgba(52, 168, 83, 0.2);">Agent Active</span>
+  </div>
+
+  <div id="contextBox" class="context-box">
+    <label for="interventionNotes">Intervention Note for Agent:</label>
+    <textarea id="interventionNotes" rows="2" placeholder="Describe manual overrides here..."></textarea>
+  </div>
+
+  <button id="actionBtn" class="btn btn-takeover">Take Over Control</button>
+
+  <div class="section-title">Agent Servers</div>
+  <div id="agentList">
+    <!-- Populated dynamically via JS -->
+  </div>
+
+  <!-- Hidden inline panel for adding/editing servers -->
+  <div id="addServerForm" class="edit-form-panel" style="display: none;">
+    <input type="text" id="serverNameInput" placeholder="Server Name (e.g., Claude Code)" />
+    <input type="text" id="serverUrlInput" placeholder="WS Endpoint (e.g., ws://localhost:8500)" />
+    <div class="edit-form-actions">
+      <button id="cancelAddBtn" class="btn-small btn-cancel">Cancel</button>
+      <button id="saveAddBtn" class="btn-small btn-save">Add Server</button>
+    </div>
+  </div>
+
+  <!-- Inline panel for editing existing servers -->
+  <div id="editServerForm" class="edit-form-panel" style="display: none;">
+    <input type="hidden" id="editServerId" />
+    <input type="text" id="editServerNameInput" placeholder="Server Name" />
+    <input type="text" id="editServerUrlInput" placeholder="WS Endpoint" />
+    <div class="edit-form-actions">
+      <button id="deleteServerBtn" class="btn-small btn-delete">Delete</button>
+      <button id="cancelEditBtn" class="btn-small btn-cancel">Cancel</button>
+      <button id="saveEditBtn" class="btn-small btn-save">Save Changes</button>
+    </div>
+  </div>
+
+  <div class="actions-row">
+    <button id="scanAgentsBtn" class="btn-action-outline">🔍 Scan for Agents</button>
+    <button id="addServerBtn" class="btn-action-outline">+ Add Agent Server</button>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
