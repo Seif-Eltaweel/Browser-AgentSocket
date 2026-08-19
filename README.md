@@ -2,7 +2,7 @@
 
 **Multi-agent browser automation operator client, native MCP server, and human-in-the-loop state control hub.**
 
-Agent Bro Hands is a secure, human-in-the-loop web automation bridge that connects autonomous AI agents (such as Antigravity, Claude Code, Cursor, or Hermes) to your actual browser session. Operating through native Model Context Protocol (MCP) and WebSocket gateways, it pairs zero-friction on-demand initiation with strict safety guardrails, viewport interaction shielding, tab group session isolation, and seamless human-agent takeover workflows.
+Agent Bro Hands is a secure, human-in-the-loop web automation bridge that connects autonomous AI agents (such as Antigravity, Claude Code, Cursor, or Hermes) to your actual browser session. Operating through native Model Context Protocol (MCP) and WebSocket gateways, it pairs zero-friction on-demand initiation with strict safety guardrails, **Shadow DOM-isolated HUD**, viewport interaction shielding, tab group session isolation, and seamless human-agent takeover workflows.
 
 ---
 
@@ -23,22 +23,23 @@ Agent Bro Hands is a secure, human-in-the-loop web automation bridge that connec
 └────────────────────────────────────────────────────────┘
           │ (HTTP / WebSocket)
           ▼
-┌───────────────────────────┐      WebSocket      ┌───────────────────────────┐
-│ FastAPI Gateway (Port 8000)│ ◄────────────────► │ Chrome Extension (MV3)    │
-│ (bro_server.py)           │                     │ (Background / Content)    │
-└───────────────────────────┘                     └───────────────────────────┘
-                                                            │ (CDP / DOM)
-                                                            ▼
-                                                  ┌───────────────────────────┐
-                                                  │ Active Tab in Group       │
-                                                  │ [Shield + Floating HUD]   │
-                                                  └───────────────────────────┘
+┌───────────────────────────┐      WebSocket (Resilient)      ┌───────────────────────────┐
+│ FastAPI Gateway (Port 8000)│ ◄────────────────────────────► │ Chrome Extension (MV3)    │
+│ (bro_server.py)           │ (Backoff + Jitter + Heartbeat) │ (background.js / alarms)  │
+└───────────────────────────┘                                └───────────────────────────┘
+                                                                           │ (CDP / Shadow Root)
+                                                                           ▼
+                                                               ┌───────────────────────────┐
+                                                               │ Active Tab in Group       │
+                                                               │ [<agent-bro-hud-host>]    │
+                                                               │ [Shadow DOM HUD + Shield] │
+                                                               └───────────────────────────┘
 ```
 
 The system comprises three coordinated subsystems:
 1. **MCP Server & Smart Launcher (`server/bro_mcp.py` & `server/bro_launcher.py`)**: Zero-friction bootstrapper exposing standard MCP tools and automatically launching backend services on demand.
-2. **FastAPI Gateway Server (`server/bro_server.py`)**: Orchestrates agent requests, enforces sensitive keyword privacy triggers, manages non-blocking lock states, and handles auto-idle lifecycle management.
-3. **Chrome Extension (`/extension`)**: A Manifest V3 extension linking to the gateway over WebSockets to execute CDP scripts, manage colored tab groups, project the floating HUD, and control the viewport interaction shield.
+2. **FastAPI Gateway Server (`server/bro_server.py` & `server/models.py`)**: Orchestrates agent requests with strict Pydantic schemas, enforces sensitive keyword privacy triggers, manages non-blocking lock states, and handles auto-idle lifecycle management.
+3. **Chrome Extension (`/extension`)**: A Manifest V3 extension linking to the gateway over resilient WebSockets to execute CDP scripts, manage colored tab groups, project the Shadow DOM-isolated Notion Dark Mode HUD, and control the viewport interaction shield.
 
 ---
 
@@ -48,6 +49,7 @@ The system comprises three coordinated subsystems:
 * **Native MCP Tools**: Directly provides `bro_execute`, `bro_status`, `bro_release_takeover`, and `bro_stop` to any MCP client.
 * **On-Demand Auto-Boot**: Automatically spins up the FastAPI gateway and launches Google Chrome with the unpacked extension if either is offline.
 * **Auto-Idle Watchdog**: Background server cleanly terminates after **20 minutes of inactivity** to prevent runaway CPU or RAM consumption.
+* **Stale PID Auto-Cleanup**: Automatically verifies process liveness and cleans stale `.bro_pid` files on startup.
 
 ### 2. 🗂️ Dynamic Tab Grouping & Session Reuse
 * **Visual Isolation**: Each agent session is assigned its own colored Chrome Tab Group (e.g. *Purple*, *Blue*, *Green*).
@@ -68,9 +70,14 @@ The system comprises three coordinated subsystems:
 * **Input Interception**: When an agent is actively running, an invisible overlay shield locks webpage clicks, typing, and drag-and-drop to prevent the human from accidentally disturbing active form-filling or CDP executions.
 * **Feedback Tooltip**: Clicking anywhere on the shielded page shows a helpful HUD cue (*"Agent is operating. Click 'Take Over' below to interact"*).
 
-### 4. ✋ Human Takeover & Pinned Handoff Modal
+### 4. 🎨 Shadow DOM Encapsulation & Notion Dark Mode HUD
+* **100% CSS Isolation**: All on-page UI elements (floating pill, interaction shield, glowing frame, and handoff modal) are rendered inside an open **Shadow Root** on `<agent-bro-hud-host>`. Host page CSS frameworks (Tailwind, Bootstrap, resets) can never break HUD styling.
+* **Notion Dark Mode Aesthetic**: Uses Notion's curated dark theme palette (`#191919`, `#202020`, `#2e2e2e`), compact pill dimensions, and crisp status badges.
+* **Event Path Keyboard Guard**: Keyboard events use `composedPath()` inspection to block host page keystrokes during agent execution while preserving fluid typing inside the handoff modal.
+
+### 5. ✋ Human Takeover & Pinned Handoff Modal
 * **1-Click Takeover**: Instantly drops the interaction shield and pauses the agent, giving you full control of the browser tab.
-* **Pinned Takeover HUD**: The bottom bar updates to **`🔒 Operator Takeover Active`** with **`▶ Release to Agent`** and stays pinned until you are ready.
+* **Pinned Takeover HUD**: The bottom bar updates to **`🔒 Operator Active`** with **`▶ Release to Agent`** and stays pinned until you are ready.
 * **Context-Enriched Handoff**: When clicking *Release to Agent*, a modal captures your notes (e.g., *"Completed 2FA login"*) and injects them directly into the agent's next execution cycle.
 
 ```
@@ -99,9 +106,10 @@ The system comprises three coordinated subsystems:
                   └──────────────────────────────┘
 ```
 
-### 5. 🔍 Chrome DevTools Protocol (CDP) Execution Engine
-* **Direct CDP Evaluation**: JavaScript runs directly via Chrome's `Runtime.evaluate` protocol for maximum speed and fidelity.
-* **Safe Attach / Detach**: The debugger automatically hooks during execution and cleanly detaches upon completion, with robust error descriptions for runtime exceptions.
+### 6. 🔌 Resilient MV3 WebSocket & CDP Engine
+* **`ResilientSocket` with Backoff**: Automatic WebSocket reconnection using exponential backoff with random jitter (`delay = min(1000 * 1.5^retry, 30000) + jitter`).
+* **`chrome.alarms` 24s Keepalive**: Prevents Manifest V3 service workers from dropping connections during long agent execution plans.
+* **25s Bounded CDP Timeout**: Script executions via Chrome DevTools Protocol (`Runtime.evaluate`) are bounded to 25 seconds with safe debugger detachment to prevent hanging promises or leaked target sessions.
 
 ---
 
@@ -176,25 +184,39 @@ You can test and drive Agent Bro Hands directly from your terminal:
 
 ```bash
 # Check gateway and extension status
-python server/bro_launcher.py status
+python -m server.bro_launcher status
 
 # Ensure gateway server and Chrome are booted & connected
-python server/bro_launcher.py start
+python -m server.bro_launcher start
 
 # Navigate to a URL in a designated session group
-python server/bro_launcher.py navigate "https://news.ycombinator.com" --title "HackerNews Automation"
+python -m server.bro_launcher navigate "https://news.ycombinator.com" --title "HackerNews Automation"
 
 # Evaluate JavaScript on the active tab in the group
-python server/bro_launcher.py eval "document.title" --title "HackerNews Automation"
+python -m server.bro_launcher eval "document.title" --title "HackerNews Automation"
 
 # Release human lockout with handoff notes
-python server/bro_launcher.py release --notes "Logged in via 2FA"
+python -m server.bro_launcher release --notes "Logged in via 2FA"
 
 # Stop active tasks
-python server/bro_launcher.py stop
+python -m server.bro_launcher stop
 
 # Terminate the background server process
-python server/bro_launcher.py kill
+python -m server.bro_launcher kill
+```
+
+---
+
+## 🧪 Running Automated Tests
+
+Agent Bro Hands includes a comprehensive test suite covering backend models, FastAPI endpoints, process management, and protocol serialization:
+
+```bash
+# Run Python Unit & Integration Tests (19 tests)
+python -m unittest discover tests -p "test_*.py" -v
+
+# Run JavaScript Protocol Tests (Node.js)
+node tests/test_protocol.test.js
 ```
 
 ---
