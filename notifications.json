@@ -1,18 +1,52 @@
-{
-  "status": "success",
-  "result": {
-    "status": "success",
-    "output": [
-      "Unread notification. New from Dean Lee in Dean's List: Humans did the work. AI got the credit. 15m Unread notification. Nadia Raafat, Abdulrahman Adel, and 5 other connections reacted to a post: Update: A sponsor has contacted me and pledged 700 euros. I only need 700 euros left. If you know anyone who can support me, please contact me. 21 reactions 19m Unread notification. New from Opportunities for Youth in Opportunities for Youths: 🤖🇺🇸 AI Rapid Response Fellowship 2026 | Earn $170K–$250K+ Advancing AI Security in the U.S. Government 🚀 50m Unread notification. New from HackBio in DNA and Dreams: ChatGPT vs AI Agent 1h Status is reachable Unread notification. Congratulate Mostafa Tarek Abdelaziz on a new position at Hiber. View more network updates. Say congrats Say congrats to Mostafa 1h Status is reachable Unread notification. Dr.Mohamed Ezzat reposted Reham Tarek's post: #وظيفة_محاسب بمنصة طلبات المهام 1️⃣إعداد ومراجعة تقارير المبيعات والذمم المدينة. 2️⃣مطابقة حسابات العملاء والشركاء. 3️⃣تحليل العمولات وإدارة المدفوعات. 4️⃣إعداد التقارير المالية الدورية. 5️⃣دعم عمليات التدقيق والأنظمة المالية والالتزام القانوني. قدم الان 👇🏻 https://lnkd.in/eDiVCu22 1h Unread notification. New from Fast Company in Fast Company Daily: The office doesn’t fix loneliness at work 1h Unread notification. 🎯 Ming \"Tommy\" Tang posted: Analysis of 10,478 cancer genomes identifies candidate driver genes and opportunities for precision oncology https://lnkd.in/e7r9_ZZe 2h Unread notification. New from LinkedIn Guide to Creating in Create Possibilities: Create Opportunities Through Your Content 2h Status is reachable Unread notification. Tareq Amin posted: One of the greatest responsibilities we face today as leaders is to democratize technology, ensuring that intelligence is not concentrated in the hands of a few, but becomes a force that empowers all of us to contribute to the future. Every great technological revolution has created two futures: one for those who build it, and one for those left behind. Artificial intelligence gives us the opportunity to change that. Every nation, every economy, every entrepreneur, every student, and every innovator should have the opportunity to participate in and help shape the intelligence economy. That future will not happen by accident. It will require a new era of technological diplomacy built on trust, digital cooperation, and partnerships that enable knowledge, innovation, and opportunity to move across borders as freely as ideas themselves. In our latest End of Limits episode, HUMAIN sat down with Deemah AlYahya, Founding Secretary-General of the Digital Cooperation Organization (DCO), who shares a compelling vision for how nations can work together to shape an inclusive digital future where technology serves as a bridge, not a barrier, and AI becomes a catalyst for shared prosperity and human progress. Watch the full episode: https://lnkd.in/dn_CVqpz 2h",
-      "Unread notification. New from Dean Lee in Dean's List: Humans did the work. AI got the credit. 15m",
-      "Unread notification. New from Dean Lee in Dean's List: Humans did the work. AI got the credit. 15m",
-      "Status is offline",
-      "Unread notification. New from Dean Lee in Dean's List: Humans did the work. AI got the credit.",
-      "New from Dean Lee in Dean's List: Humans did the work. AI got the credit.",
-      "15m",
-      "Change notification preferences Delete notification",
-      "Change notification preferences",
-      "Change notification preferences"
-    ]
+[
+  {
+    "status": "Unread",
+    "content": "New from Fast Company in Fast Company Daily: Panic isn’t an AI strategy",
+    "time": "37m"
+  },
+  {
+    "status": "Unread",
+    "content": "New from Opportunities for Youth in Opportunities for Youths: 🎓🌍 Global Social Sciences Postdoctoral & Fellowship Opportunities 2026 | Fully Funded Research Positions Across Europe & the UK",
+    "time": "53m"
+  },
+  {
+    "status": "Unread",
+    "content": "🎯 Ming \"Tommy\" Tang posted: Genome-wide CRISPR screens identify critical targets to enhance CAR-NK cell antitumor potency https://lnkd.in/ers3Nwyh",
+    "time": "55m"
+  },
+  {
+    "status": "Unread",
+    "content": "🎯 Ming \"Tommy\" Tang posted: Two resources to learn bioinformatics yourself: 1. Path to a free self-taught education in Bioinformatics! https://lnkd.in/eQTfY5r5 2. learning-bioinformatics-at-home https://lnkd.in/eTiZWVrn I started this repo 6 years ago at Harvard FAS informatics. free learning resources are abundant online, it is the desire to learn that is rare. Take Actions! I hope you've found this post helpful. Follow me for more. Subscribe to my FREE newsletter chatomics to learn bioinformatics https://lnkd.in/erw83Svn",
+    "time": "1h"
+  },
+  {
+    "status": "Unread",
+    "content": "New from Moodle in The Moodle Newsletter: A downloadable practical guide: strengthening your learning ecosystem's adaptability",
+    "time": "1h"
+  },
+  {
+    "status": "Unread",
+    "content": "New from Opportunities for Youth in Opportunities for Youths: 🌍📚 Free UN Online Course on Gender & Environment 2026 | Earn a UN Digital Certificate and Learn at Your Own Pace! 🌱",
+    "time": "1h"
+  },
+  {
+    "status": "Unread",
+    "content": "🎯 Ming \"Tommy\" Tang posted: Three things people call bugs in LLMs. They are features. If you use AI tools for real work and you do not understand this, you will get burned. LLMs are probabilistic. Same prompt, slightly different answer. If you need 100 percent reproducibility, use a different tool. If your workflow leans on a commercial model and Anthropic ships a new version tomorrow, your outputs shift with it. Not a defect. The design. They hallucinate. Even the frontier models. At an airport last week I asked Claude where to buy a gift. It named a store. I walked over. The store did not exist. I went back and pushed the model. It agreed the store did not exist. Opus 4.8. frontier model. Still wrong. For a gift, annoying. For a variant call or a drug target, dangerous. You have to judge the output. If you cannot tell whether the answer is right, do not use an agent for the task. Use a deterministic tool and read the output yourself. Think about what your AI tool actually depends on. Continuity: if the provider pulls the model or changes weights, your workflow moves. For stable work, run open-weights models locally. Reproducibility: not solved. Hallucination: not going away. Design around all three. An AI tool is better than most people. It is not better than an expert with twenty years in the field. If you are the expert, the AI is a force multiplier. If you are not, it is a plausible-sounding coin flip you have no way to check. Stop treating probabilism, hallucination, and model drift like bugs Anthropic will fix next quarter. They will not. Build your work around what LLMs actually are. That is the whole game. I hope you've found this post helpful. Follow me for more. Subscribe to my FREE newsletter chatomics to learn bioinformatics https://lnkd.in/erw83Svn",
+    "time": "1h"
+  },
+  {
+    "status": "Unread",
+    "content": "AstraZeneca is hiring. Apply today.",
+    "time": "2h"
+  },
+  {
+    "status": "Unread",
+    "content": "New from Kary Oberbrunner ᴵᴾ in Ideas Into Empires: IP for Online Businesses: What Every Entrepreneur Should Know",
+    "time": "3h"
+  },
+  {
+    "status": "Unread",
+    "content": "New from Opportunities for Youth in Opportunities for Youths: 💰🤖 People-First AI Fund 2026: $50 Million Grant for U.S. Nonprofits Using AI for Community Impact",
+    "time": "3h"
   }
-}
+]

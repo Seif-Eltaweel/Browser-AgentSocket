@@ -123,8 +123,9 @@ function connectToServer(server) {
         }
     };
 
+    const retryDelays = { hermes: 3000, antigravity: 10000, claude: 10000, vps: 15000 };
+
     ws.onclose = () => {
-        console.warn(`[Hub] Connection closed for ${server.name}`);
         delete sockets[server.id];
         
         // Reconnect attempt if still enabled in settings
@@ -132,14 +133,22 @@ function connectToServer(server) {
             const currentServers = data.agent_servers || [];
             const activeServer = currentServers.find(s => s.id === server.id);
             if (activeServer && activeServer.enabled) {
-                console.log(`[Hub] Reconnecting to ${server.name} in 3s...`);
-                setTimeout(() => connectToServer(activeServer), 3000);
+                const delay = retryDelays[server.id] || 10000;
+                setTimeout(() => {
+                    chrome.storage.local.get(["agent_servers"], (freshData) => {
+                        const freshServers = freshData.agent_servers || [];
+                        const freshServer = freshServers.find(s => s.id === server.id);
+                        if (freshServer && freshServer.enabled) {
+                            connectToServer(freshServer);
+                        }
+                    });
+                }, delay);
             }
         });
     };
 
     ws.onerror = (err) => {
-        console.error(`[Hub] WebSocket error on ${server.name}:`, err);
+        // Suppress noisy error event object logs for inactive optional servers
     };
 }
 
@@ -322,37 +331,93 @@ async function handleTaskComplete(sessionTitle) {
     }
 }
 
-// Locate or create the dynamic tab group and execute navigation within it
+// Active tasks session tracking: sessionTitle -> { groupColor, tabId, groupId, active }
+const activeSessions = new Map();
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    if (changeInfo.status === "complete" && tab.groupId && tab.groupId !== chrome.tabGroups.TAB_GROUP_ID_NONE) {
+        chrome.tabGroups.get(tab.groupId, (group) => {
+            if (chrome.runtime.lastError || !group) return;
+            const session = activeSessions.get(group.title);
+            if (session && session.active) {
+                chrome.tabs.sendMessage(tabId, {
+                    type: "show_glow",
+                    session_title: group.title,
+                    group_color: session.groupColor || "purple"
+                }).catch(() => {});
+            }
+        });
+    }
+});
+
+// Locate or create the dynamic tab group and execute navigation within it, reusing existing tabs in the group
 async function handleNavigation(url, sessionTitle, groupColor) {
-    return new Promise(async (resolve) => {
-        try {
-            const groups = await chrome.tabGroups.query({ title: sessionTitle });
-            let targetGroupId = null;
-            if (groups && groups.length > 0) {
-                targetGroupId = groups[0].id;
+    activeSessions.set(sessionTitle, { groupColor, active: true });
+    try {
+        const groups = await chrome.tabGroups.query({ title: sessionTitle });
+
+        if (groups && groups.length > 0) {
+            const group = groups[0];
+            const tabs = await chrome.tabs.query({ groupId: group.id });
+
+            if (tabs && tabs.length > 0) {
+                const targetTab = tabs.find(t => t.active) || tabs[0];
+                try {
+                    const updatedTab = await chrome.tabs.update(targetTab.id, { url: url, active: true });
+                    activeSessions.set(sessionTitle, { groupColor, tabId: updatedTab.id, groupId: group.id, active: true });
+                    return {
+                        status: "success",
+                        tabId: updatedTab.id,
+                        groupId: group.id,
+                        reused: true
+                    };
+                } catch (updateErr) {
+                    console.warn(`[Hub] Failed to update tab ${targetTab.id}, falling back to creating new tab:`, updateErr);
+                }
             }
 
-            chrome.tabs.create({ url: url }, (newTab) => {
-                if (chrome.runtime.lastError) {
-                    resolve({ status: "error", message: chrome.runtime.lastError.message });
-                    return;
-                }
-
-                if (targetGroupId !== null) {
-                    chrome.tabs.group({ groupId: targetGroupId, tabIds: newTab.id }, () => {
-                        if (chrome.runtime.lastError) {
-                            createFreshHermesGroup(newTab.id, sessionTitle, groupColor, resolve);
-                        } else {
-                            resolve({ status: "success", tabId: newTab.id, groupId: targetGroupId });
-                        }
-                    });
-                } else {
-                    createFreshHermesGroup(newTab.id, sessionTitle, groupColor, resolve);
-                }
-            });
-        } catch (e) {
-            resolve({ status: "error", message: e.message });
+            // Group exists but has no open tabs or update failed
+            const res = await createAndGroupTab(url, sessionTitle, groupColor, group.id);
+            if (res && res.tabId) {
+                activeSessions.set(sessionTitle, { groupColor, tabId: res.tabId, groupId: res.groupId, active: true });
+            }
+            return res;
         }
+
+        // No group exists yet
+        const res = await createAndGroupTab(url, sessionTitle, groupColor, null);
+        if (res && res.tabId) {
+            activeSessions.set(sessionTitle, { groupColor, tabId: res.tabId, groupId: res.groupId, active: true });
+        }
+        return res;
+    } catch (e) {
+        console.error("[Hub] Error in handleNavigation:", e);
+        return { status: "error", message: e.message || String(e) };
+    }
+}
+
+function createAndGroupTab(url, sessionTitle, groupColor, existingGroupId) {
+    return new Promise((resolve) => {
+        chrome.tabs.create({ url: url, active: true }, (newTab) => {
+            if (chrome.runtime.lastError || !newTab) {
+                const err = chrome.runtime.lastError ? chrome.runtime.lastError.message : "Failed to create tab";
+                resolve({ status: "error", message: err });
+                return;
+            }
+
+            if (existingGroupId !== null && existingGroupId !== undefined) {
+                chrome.tabs.group({ groupId: existingGroupId, tabIds: newTab.id }, () => {
+                    if (chrome.runtime.lastError) {
+                        // Existing group might have been closed/ungrouped, fallback to fresh group
+                        createFreshHermesGroup(newTab.id, sessionTitle, groupColor, resolve);
+                    } else {
+                        resolve({ status: "success", tabId: newTab.id, groupId: existingGroupId, reused: false });
+                    }
+                });
+            } else {
+                createFreshHermesGroup(newTab.id, sessionTitle, groupColor, resolve);
+            }
+        });
     });
 }
 
@@ -371,7 +436,7 @@ function createFreshHermesGroup(tabId, sessionTitle, groupColor, resolve) {
                 resolve({ status: "error", message: chrome.runtime.lastError.message });
                 return;
             }
-            resolve({ status: "success", tabId: tabId, groupId: groupId });
+            resolve({ status: "success", tabId: tabId, groupId: groupId, reused: false });
         });
     });
 }
@@ -397,84 +462,125 @@ async function getTargetTabId(sessionTitle) {
     return null;
 }
 
-async function handleExecuteJS(code, sessionTitle, groupColor) {
-    try {
-        const tabId = await getTargetTabId(sessionTitle);
-        if (!tabId) {
-            return { 
-                status: "error", 
-                message: `Security Block: No tab found in the secure '${sessionTitle}' group. Navigate first to initialize a tab in the group.` 
-            };
-        }
+// Active evaluations tracking: tabId -> Set of reject callbacks
+const activeEvaluations = new Map();
 
-        try {
-            await chrome.tabs.sendMessage(tabId, { 
-                type: "show_glow", 
-                session_title: sessionTitle, 
-                group_color: groupColor 
-            });
-        } catch (e) {}
+chrome.tabs.onRemoved.addListener((tabId) => {
+    if (activeEvaluations.has(tabId)) {
+        const rejects = activeEvaluations.get(tabId);
+        activeEvaluations.delete(tabId);
+        rejects.forEach(reject => reject(new Error("Tab was closed during execution.")));
+    }
+});
 
-        console.log(`Executing dynamic script via CDP in tab ${tabId} (inside secure group '${sessionTitle}')`);
-        const target = { tabId: tabId };
+chrome.debugger.onDetach.addListener((source, reason) => {
+    console.warn(`[CDP] Debugger detached from tab ${source.tabId}:`, reason);
+});
 
-        // Attach debugger to the tab
-        await new Promise((resolve, reject) => {
-            chrome.debugger.attach(target, "1.3", () => {
-                if (chrome.runtime.lastError) {
-                    const errMsg = chrome.runtime.lastError.message;
-                    if (errMsg.includes("Already attached")) {
-                        resolve();
-                    } else {
-                        reject(new Error(errMsg));
-                    }
-                } else {
+function attachDebugger(target) {
+    return new Promise((resolve, reject) => {
+        chrome.debugger.attach(target, "1.3", () => {
+            if (chrome.runtime.lastError) {
+                const errMsg = chrome.runtime.lastError.message || "";
+                if (errMsg.includes("Already attached")) {
                     resolve();
+                } else {
+                    reject(new Error(errMsg));
                 }
-            });
+            } else {
+                resolve();
+            }
         });
+    });
+}
 
-        // Run Runtime.evaluate to execute dynamic JavaScript bypassing CSP
-        const result = await new Promise((resolve, reject) => {
-            chrome.debugger.sendCommand(target, "Runtime.evaluate", {
+function detachDebugger(target) {
+    return new Promise((resolve) => {
+        chrome.debugger.detach(target, () => {
+            // Ignore errors if debugger is already detached or tab closed
+            resolve();
+        });
+    });
+}
+
+function sendCDPCommand(target, method, commandParams) {
+    return new Promise((resolve, reject) => {
+        chrome.debugger.sendCommand(target, method, commandParams, (response) => {
+            if (chrome.runtime.lastError) {
+                reject(new Error(chrome.runtime.lastError.message));
+            } else {
+                resolve(response);
+            }
+        });
+    });
+}
+
+async function handleExecuteJS(code, sessionTitle, groupColor) {
+    const tabId = await getTargetTabId(sessionTitle);
+    if (!tabId) {
+        return { 
+            status: "error", 
+            message: `Security Block: No tab found in the secure '${sessionTitle}' group. Navigate first to initialize a tab in the group.` 
+        };
+    }
+
+    try {
+        await chrome.tabs.sendMessage(tabId, { 
+            type: "show_glow", 
+            session_title: sessionTitle, 
+            group_color: groupColor 
+        });
+    } catch (e) {}
+
+    console.log(`Executing dynamic script via CDP in tab ${tabId} (inside secure group '${sessionTitle}')`);
+    const target = { tabId: tabId };
+    let attached = false;
+
+    let tabCloseReject;
+    const tabClosePromise = new Promise((_, reject) => {
+        tabCloseReject = reject;
+        if (!activeEvaluations.has(tabId)) {
+            activeEvaluations.set(tabId, new Set());
+        }
+        activeEvaluations.get(tabId).add(reject);
+    });
+
+    try {
+        const evalPromise = (async () => {
+            await attachDebugger(target);
+            attached = true;
+
+            const res = await sendCDPCommand(target, "Runtime.evaluate", {
                 expression: code,
                 returnByValue: true,
                 awaitPromise: true
-            }, (response) => {
-                if (chrome.runtime.lastError) {
-                    reject(new Error(chrome.runtime.lastError.message));
-                } else if (response && response.exceptionDetails) {
-                    const exMsg = response.exceptionDetails.exception.description || "JavaScript execution error.";
-                    reject(new Error(exMsg));
-                } else {
-                    resolve(response && response.result ? response.result.value : null);
-                }
             });
-        });
 
-        // Detach debugger
-        await new Promise((resolve) => {
-            chrome.debugger.detach(target, () => {
-                resolve();
-            });
-        });
+            if (res && res.exceptionDetails) {
+                const desc = res.exceptionDetails.exception?.description 
+                          || res.exceptionDetails.text 
+                          || "JavaScript runtime error";
+                throw new Error(`[CDP JS Error]: ${desc}`);
+            }
 
-        // Turn off page glow
-        try {
-            await chrome.tabs.sendMessage(tabId, { type: "hide_glow" });
-        } catch (e) {}
+            return res && res.result ? res.result.value : null;
+        })();
 
+        const result = await Promise.race([evalPromise, tabClosePromise]);
         return { status: "success", output: result };
     } catch (err) {
         console.error("Script execution failed:", err);
-        try {
-            chrome.debugger.detach({ tabId: await getTargetTabId(sessionTitle) }, () => {});
-        } catch(e) {}
-        try {
-            const tabId = await getTargetTabId(sessionTitle);
-            if (tabId) await chrome.tabs.sendMessage(tabId, { type: "hide_glow" });
-        } catch (e) {}
         return { status: "error", message: err.message };
+    } finally {
+        if (activeEvaluations.has(tabId)) {
+            const set = activeEvaluations.get(tabId);
+            set.delete(tabCloseReject);
+            if (set.size === 0) activeEvaluations.delete(tabId);
+        }
+        if (attached) {
+            await detachDebugger(target);
+        }
+        // Retain HUD and interaction shield during task session; cleared only on task_complete or stop
     }
 }
 

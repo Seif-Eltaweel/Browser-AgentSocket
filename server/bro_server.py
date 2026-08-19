@@ -91,9 +91,14 @@ async def extension_endpoint(websocket: WebSocket):
 
 @app.post("/execute")
 async def execute_to_extension(command: AgentActionPayload):
-    # Lockout / pause thread if human is in control
-    while state.human_in_control:
-        await asyncio.sleep(1)
+    # Non-blocking check: immediately report lock if human is currently in control
+    if state.human_in_control:
+        return {
+            "status": "human_locked",
+            "message": "Human operator is currently in control of the browser session.",
+            "last_intervention_notes": state.last_intervention_notes,
+            "instructions": "Wait for human operator to click 'Release Control' or check GET /status."
+        }
 
     # Check if we should inject human notes context from a recent release
     if state.last_intervention_notes:
@@ -184,7 +189,7 @@ async def human_release(payload: ReleasePayload):
     return {"status": "success", "human_in_control": False}
 
 @app.post("/stop")
-def stop_active_task():
+async def stop_active_task():
     state.human_in_control = False
     state.last_intervention_notes = None
     # Cancel all pending future responses
@@ -192,4 +197,15 @@ def stop_active_task():
         if not future.done():
             future.set_result({"status": "aborted", "message": "Task terminated by human operator."})
     print("[Bridge] Task aborted by user takeover stop command.")
+    
+    if state.extension_ws:
+        try:
+            await state.extension_ws.send_text(json.dumps({
+                "type": "state_sync",
+                "human_in_control": False,
+                "notes": "Task terminated."
+            }))
+        except Exception as e:
+            print(f"[Bridge] Error sending state_sync on stop: {e}")
+
     return {"status": "success"}

@@ -1,13 +1,32 @@
-// content.js
-console.log('Agent Bro Hands content script loaded.');
-
-let hermesGlowOverlay = null;
-let hermesControlPill = null;
-let hermesNotesModal = null;
+// content.js - Agent Bro Hands On-Page HUD & Execution Interactivity
+console.log('[Agent Bro Hands] Content script active.');
 
 let currentSessionTitle = "Agent Bro Task";
 let currentGroupColor = "purple";
+let isShieldActive = false;
+let tooltipTimeout = null;
 
+// ============================================================================
+// KEYBOARD GUARD (INTERACTION SHIELD)
+// Blocks accidental typing on the host page during autonomous execution
+// ============================================================================
+function keyboardGuard(e) {
+    if (!isShieldActive) return;
+    const hudContainer = document.getElementById("agent-bro-hands-hud-container");
+    if (hudContainer && hudContainer.contains(e.target)) {
+        return; // Allow typing inside HUD input elements / textareas
+    }
+    e.stopPropagation();
+    e.preventDefault();
+}
+
+window.addEventListener("keydown", keyboardGuard, true);
+window.addEventListener("keyup", keyboardGuard, true);
+window.addEventListener("keypress", keyboardGuard, true);
+
+// ============================================================================
+// MESSAGE LISTENER
+// ============================================================================
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === "show_glow") {
         currentSessionTitle = message.session_title || "Agent Bro Task";
@@ -15,276 +34,566 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         renderActiveGlow(currentSessionTitle, currentGroupColor);
         sendResponse({ status: "success" });
     } else if (message.type === "hide_glow") {
-        removeGlowOverlay();
+        removeAllUI();
         sendResponse({ status: "success" });
     }
-    return false; // synchronous response
+    return false;
 });
 
 // ============================================================================
-// UI RENDERING ENGINE (STATES)
+// THEME PALETTE HELPER
 // ============================================================================
+function getThemeColors(colorName) {
+    const palette = {
+        purple: {
+            borderHex: "#BB86FC",
+            glowColor: "rgba(187, 134, 252, 0.6)",
+            accentGrad: "linear-gradient(135deg, #7b1fa2, #9c27b0)",
+            tagBg: "rgba(187, 134, 252, 0.15)"
+        },
+        blue: {
+            borderHex: "#4285F4",
+            glowColor: "rgba(66, 133, 244, 0.6)",
+            accentGrad: "linear-gradient(135deg, #1976d2, #4285f4)",
+            tagBg: "rgba(66, 133, 244, 0.15)"
+        },
+        green: {
+            borderHex: "#34A853",
+            glowColor: "rgba(52, 168, 83, 0.6)",
+            accentGrad: "linear-gradient(135deg, #2e7d32, #34a853)",
+            tagBg: "rgba(52, 168, 83, 0.15)"
+        },
+        orange: {
+            borderHex: "#FF8F00",
+            glowColor: "rgba(255, 143, 0, 0.6)",
+            accentGrad: "linear-gradient(135deg, #ef6c00, #ff8f00)",
+            tagBg: "rgba(255, 143, 0, 0.15)"
+        },
+        red: {
+            borderHex: "#EA4335",
+            glowColor: "rgba(234, 67, 53, 0.6)",
+            accentGrad: "linear-gradient(135deg, #c62828, #ea4335)",
+            tagBg: "rgba(234, 67, 53, 0.15)"
+        }
+    };
+    return palette[colorName] || palette.purple;
+}
+
+// ============================================================================
+// UI CONTAINER & TEARDOWN
+// ============================================================================
+function getOrCreateRootContainer() {
+    let root = document.getElementById("agent-bro-hands-hud-container");
+    if (!root) {
+        root = document.createElement("div");
+        root.id = "agent-bro-hands-hud-container";
+        root.style.cssText = `
+            position: fixed !important;
+            top: 0 !important;
+            left: 0 !important;
+            right: 0 !important;
+            bottom: 0 !important;
+            width: 100vw !important;
+            height: 100vh !important;
+            pointer-events: none !important;
+            z-index: 2147483647 !important;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important;
+            font-size: 13px !important;
+            line-height: 1.4 !important;
+            box-sizing: border-box !important;
+        `;
+        const host = document.body || document.documentElement;
+        host.appendChild(root);
+        injectGlobalStyles();
+    }
+    return root;
+}
 
 function removeAllUI() {
-    removeGlowOverlay();
-    removeControlPill();
-    removeNotesModal();
-}
-
-function removeGlowOverlay() {
-    if (hermesGlowOverlay && hermesGlowOverlay.parentNode) {
-        hermesGlowOverlay.parentNode.removeChild(hermesGlowOverlay);
+    isShieldActive = false;
+    clearTimeout(tooltipTimeout);
+    const root = document.getElementById("agent-bro-hands-hud-container");
+    if (root && root.parentNode) {
+        root.parentNode.removeChild(root);
     }
-    hermesGlowOverlay = null;
 }
 
-function removeControlPill() {
-    if (hermesControlPill && hermesControlPill.parentNode) {
-        hermesControlPill.parentNode.removeChild(hermesControlPill);
-    }
-    hermesControlPill = null;
+function injectGlobalStyles() {
+    if (document.getElementById("agent-bro-hud-styles")) return;
+    const style = document.createElement("style");
+    style.id = "agent-bro-hud-styles";
+    style.textContent = `
+        @keyframes agentBroGlowPulse {
+            0% { 
+                box-shadow: inset 0 0 20px 4px var(--ab-glow-color, rgba(66, 133, 244, 0.4)), 0 0 12px 2px var(--ab-glow-color, rgba(66, 133, 244, 0.4)); 
+            }
+            100% { 
+                box-shadow: inset 0 0 40px 10px var(--ab-glow-color, rgba(66, 133, 244, 0.75)), 0 0 24px 6px var(--ab-glow-color, rgba(66, 133, 244, 0.6)); 
+            }
+        }
+        @keyframes agentBroDotPing {
+            0% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.4); opacity: 0.6; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        @keyframes agentBroFadeInUp {
+            from { opacity: 0; transform: translate(-50%, 16px); }
+            to { opacity: 1; transform: translate(-50%, 0); }
+        }
+        @keyframes agentBroModalFadeIn {
+            from { opacity: 0; transform: translate(-50%, -46%); }
+            to { opacity: 1; transform: translate(-50%, -50%); }
+        }
+        .ab-btn {
+            font-family: inherit !important;
+            font-size: 12px !important;
+            font-weight: 600 !important;
+            padding: 6px 14px !important;
+            border-radius: 20px !important;
+            cursor: pointer !important;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+            display: inline-flex !important;
+            align-items: center !important;
+            gap: 6px !important;
+            pointer-events: auto !important;
+            user-select: none !important;
+            outline: none !important;
+            border: none !important;
+        }
+        .ab-btn:hover {
+            transform: translateY(-1px) !important;
+            filter: brightness(1.1) !important;
+        }
+        .ab-btn:active {
+            transform: translateY(0px) !important;
+            filter: brightness(0.95) !important;
+        }
+    `;
+    document.head.appendChild(style);
 }
 
-function removeNotesModal() {
-    if (hermesNotesModal && hermesNotesModal.parentNode) {
-        hermesNotesModal.parentNode.removeChild(hermesNotesModal);
-    }
-    hermesNotesModal = null;
-}
-
-// 1. ACTIVE STATE: Pulsing border glow & bottom 'Take Over' pill
+// ============================================================================
+// 1. ACTIVE RUNNING STATE: Viewport Glow & Floating HUD Pill & Shield
+// ============================================================================
 function renderActiveGlow(sessionTitle, groupColor) {
-    removeAllUI();
+    const root = getOrCreateRootContainer();
+    root.innerHTML = ""; // Clear existing child views
+    isShieldActive = true;
 
-    let glowColor = "rgba(187, 134, 252, 0.6)"; // Default purple
-    let borderHex = "#BB86FC";
-    if (groupColor === "orange") {
-        glowColor = "rgba(255, 143, 0, 0.6)";
-        borderHex = "#FF8F00";
-    } else if (groupColor === "red") {
-        glowColor = "rgba(234, 67, 53, 0.6)";
-        borderHex = "#EA4335";
-    } else if (groupColor === "blue") {
-        glowColor = "rgba(66, 133, 244, 0.6)";
-        borderHex = "#4285F4";
-    } else if (groupColor === "green") {
-        glowColor = "rgba(52, 168, 83, 0.6)";
-        borderHex = "#34A853";
-    }
+    const theme = getThemeColors(groupColor);
+    root.style.setProperty("--ab-glow-color", theme.glowColor);
 
-    // A. Viewport Glow Frame
-    hermesGlowOverlay = document.createElement("div");
-    hermesGlowOverlay.id = "hermes-glow-overlay";
-    hermesGlowOverlay.style.cssText = `
-        position: fixed !important;
+    // A. Full Viewport Border Glow
+    const glowFrame = document.createElement("div");
+    glowFrame.id = "ab-glow-frame";
+    glowFrame.style.cssText = `
+        position: absolute !important;
         top: 0 !important;
         left: 0 !important;
         right: 0 !important;
         bottom: 0 !important;
         pointer-events: none !important;
-        z-index: 2147483646 !important;
-        box-shadow: inset 0 0 18px 6px ${glowColor} !important;
-        border: 3px solid ${borderHex} !important;
-        transition: all 0.3s ease !important;
+        border: 3.5px solid ${theme.borderHex} !important;
+        box-shadow: inset 0 0 24px 6px ${theme.glowColor}, 0 0 16px 2px ${theme.glowColor} !important;
+        animation: agentBroGlowPulse 2.2s infinite alternate ease-in-out !important;
         box-sizing: border-box !important;
-        animation: hermesPulse 2s infinite alternate !important;
+        z-index: 2147483645 !important;
+    `;
+    root.appendChild(glowFrame);
+
+    // B. Interaction Shield Overlay (Blocks accidental clicks, scrolls, selection on host page)
+    const shield = document.createElement("div");
+    shield.id = "ab-interaction-shield";
+    shield.style.cssText = `
+        position: absolute !important;
+        top: 0 !important;
+        left: 0 !important;
+        right: 0 !important;
+        bottom: 0 !important;
+        z-index: 2147483646 !important;
+        pointer-events: auto !important;
+        cursor: not-allowed !important;
+        background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.02) 60%, ${theme.tagBg} 100%) !important;
     `;
 
-    if (!document.getElementById("hermes-style-rules")) {
-        const style = document.createElement("style");
-        style.id = "hermes-style-rules";
-        style.textContent = `
-            @keyframes hermesPulse {
-                0% { box-shadow: inset 0 0 16px 4px ${glowColor}; }
-                100% { box-shadow: inset 0 0 24px 8px ${glowColor}; }
-            }
-        `;
-        document.head.appendChild(style);
-    }
+    // Intercept mouse interactions and show helpful takeover tooltip
+    shield.addEventListener("click", (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        showInterventionTooltip(e.clientX, e.clientY);
+    });
+    shield.addEventListener("mousedown", (e) => { e.stopPropagation(); e.preventDefault(); });
+    shield.addEventListener("mouseup", (e) => { e.stopPropagation(); e.preventDefault(); });
+    shield.addEventListener("contextmenu", (e) => { e.stopPropagation(); e.preventDefault(); });
+    shield.addEventListener("dblclick", (e) => { e.stopPropagation(); e.preventDefault(); });
 
-    // B. Control Pill
-    hermesControlPill = document.createElement("div");
-    hermesControlPill.id = "hermes-control-pill";
-    hermesControlPill.style.cssText = getPillStyle();
+    root.appendChild(shield);
 
-    const indicator = document.createElement("span");
-    indicator.style.cssText = `
-        display: inline-block !important;
+    // C. Bottom Floating HUD Pill
+    const pill = document.createElement("div");
+    pill.id = "ab-control-pill";
+    pill.style.cssText = `
+        position: absolute !important;
+        bottom: 24px !important;
+        left: 50% !important;
+        transform: translate(-50%, 0) !important;
+        z-index: 2147483647 !important;
+        pointer-events: auto !important;
+        background: rgba(15, 12, 27, 0.9) !important;
+        backdrop-filter: blur(16px) !important;
+        -webkit-backdrop-filter: blur(16px) !important;
+        border: 1px solid rgba(255, 255, 255, 0.12) !important;
+        border-radius: 32px !important;
+        padding: 8px 16px !important;
+        color: #E2DDF0 !important;
+        display: flex !important;
+        align-items: center !important;
+        gap: 12px !important;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 16px ${theme.glowColor} !important;
+        animation: agentBroFadeInUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) !important;
+        box-sizing: border-box !important;
+    `;
+
+    // Dot indicator
+    const dot = document.createElement("span");
+    dot.style.cssText = `
         width: 8px !important;
         height: 8px !important;
-        background: ${borderHex} !important;
+        background: ${theme.borderHex} !important;
         border-radius: 50% !important;
-        box-shadow: 0 0 8px ${borderHex} !important;
+        box-shadow: 0 0 8px ${theme.borderHex} !important;
+        animation: agentBroDotPing 1.8s infinite ease-in-out !important;
+        display: inline-block !important;
     `;
 
-    const labelText = document.createElement("span");
-    labelText.innerText = `${sessionTitle} is active...`;
+    // Title label
+    const label = document.createElement("div");
+    label.style.cssText = `
+        display: flex !important;
+        align-items: center !important;
+        gap: 6px !important;
+        font-weight: 600 !important;
+        color: #FFFFFF !important;
+        font-size: 12.5px !important;
+    `;
+    label.innerHTML = `<span style="opacity: 0.85;">🤖</span> <span>${escapeHtml(sessionTitle)}</span> <span style="font-size: 11px; opacity: 0.6; font-weight: 400;">is active</span>`;
 
+    // Action buttons container
+    const btnGroup = document.createElement("div");
+    btnGroup.style.cssText = `display: flex !important; align-items: center !important; gap: 8px !important; margin-left: 4px !important;`;
+
+    // Take Over button
     const takeoverBtn = document.createElement("button");
-    takeoverBtn.innerText = "Take Over";
-    takeoverBtn.style.cssText = getButtonStyle("#ea4335", "#c5221f");
-    takeoverBtn.onmouseover = () => {
-        takeoverBtn.style.transform = "scale(1.05)";
-        takeoverBtn.style.boxShadow = "0 4px 12px rgba(234, 67, 53, 0.4)";
-    };
-    takeoverBtn.onmouseout = () => {
-        takeoverBtn.style.transform = "scale(1)";
-        takeoverBtn.style.boxShadow = "0 2px 8px rgba(234, 67, 53, 0.3)";
-    };
+    takeoverBtn.className = "ab-btn";
+    takeoverBtn.innerHTML = "<span>✋</span> <span>Take Over</span>";
+    takeoverBtn.style.cssText += `
+        background: linear-gradient(135deg, #d32f2f, #ea4335) !important;
+        color: #ffffff !important;
+        box-shadow: 0 2px 8px rgba(234, 67, 53, 0.35) !important;
+    `;
     takeoverBtn.onclick = () => {
-        // Switch locally to Takeover State
         renderTakeoverUI(sessionTitle);
-        // Send state change back to background script
-        chrome.runtime.sendMessage({ 
-            type: "page_takeover", 
-            notes: `User took over control on tab: ${window.location.hostname}` 
+        chrome.runtime.sendMessage({
+            type: "page_takeover",
+            notes: `Operator initiated manual takeover on ${window.location.hostname}`
         });
     };
 
-    hermesControlPill.appendChild(indicator);
-    hermesControlPill.appendChild(labelText);
-    hermesControlPill.appendChild(takeoverBtn);
-
-    document.documentElement.appendChild(hermesGlowOverlay);
-    document.documentElement.appendChild(hermesControlPill);
-}
-
-// 2. TAKEOVER STATE: No glow, bottom 'Stop' & 'Resume' pill
-function renderTakeoverUI(sessionTitle) {
-    removeAllUI();
-
-    hermesControlPill = document.createElement("div");
-    hermesControlPill.id = "hermes-control-pill";
-    hermesControlPill.style.cssText = getPillStyle();
-
-    const indicator = document.createElement("span");
-    indicator.style.cssText = `
-        display: inline-block !important;
-        width: 8px !important;
-        height: 8px !important;
-        background: #EA4335 !important;
-        border-radius: 50% !important;
-        box-shadow: 0 0 8px #EA4335 !important;
-    `;
-
-    const labelText = document.createElement("span");
-    labelText.innerText = "User taking over control";
-
-    const btnContainer = document.createElement("div");
-    btnContainer.style.cssText = "display: flex !important; gap: 8px !important;";
-
+    // Stop button
     const stopBtn = document.createElement("button");
-    stopBtn.innerText = "Stop";
-    stopBtn.style.cssText = getButtonStyle("#333", "#222") + "border: 1px solid rgba(255,255,255,0.1) !important;";
+    stopBtn.className = "ab-btn";
+    stopBtn.innerHTML = "<span>⏹</span> <span>Stop</span>";
+    stopBtn.style.cssText += `
+        background: rgba(255, 255, 255, 0.08) !important;
+        border: 1px solid rgba(255, 255, 255, 0.12) !important;
+        color: #e0e0e0 !important;
+    `;
     stopBtn.onclick = () => {
         chrome.runtime.sendMessage({ type: "page_stop" });
         removeAllUI();
     };
 
+    btnGroup.appendChild(takeoverBtn);
+    btnGroup.appendChild(stopBtn);
+
+    pill.appendChild(dot);
+    pill.appendChild(label);
+    pill.appendChild(btnGroup);
+
+    root.appendChild(pill);
+}
+
+// ============================================================================
+// INTERVENTION HINT TOOLTIP
+// ============================================================================
+function showInterventionTooltip(x, y) {
+    const root = getOrCreateRootContainer();
+    let tooltip = document.getElementById("ab-shield-tooltip");
+    if (!tooltip) {
+        tooltip = document.createElement("div");
+        tooltip.id = "ab-shield-tooltip";
+        root.appendChild(tooltip);
+    }
+
+    const safeTop = Math.min(Math.max(y - 50, 20), window.innerHeight - 80);
+    const safeLeft = Math.min(Math.max(x - 140, 20), window.innerWidth - 320);
+
+    tooltip.style.cssText = `
+        position: fixed !important;
+        top: ${safeTop}px !important;
+        left: ${safeLeft}px !important;
+        z-index: 2147483647 !important;
+        background: rgba(20, 16, 36, 0.95) !important;
+        border: 1px solid rgba(187, 134, 252, 0.4) !important;
+        color: #F1EDFA !important;
+        padding: 8px 14px !important;
+        border-radius: 12px !important;
+        font-size: 12px !important;
+        font-weight: 500 !important;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.6), 0 0 14px rgba(187, 134, 252, 0.25) !important;
+        backdrop-filter: blur(14px) !important;
+        -webkit-backdrop-filter: blur(14px) !important;
+        pointer-events: none !important;
+        animation: agentBroFadeInUp 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
+        display: flex !important;
+        align-items: center !important;
+        gap: 8px !important;
+    `;
+    tooltip.innerHTML = `<span>🤖</span> <span>Agent is operating. Click <b>'Take Over'</b> below to interact.</span>`;
+
+    clearTimeout(tooltipTimeout);
+    tooltipTimeout = setTimeout(() => {
+        if (tooltip && tooltip.parentNode) tooltip.remove();
+    }, 2400);
+}
+
+// ============================================================================
+// 2. TAKEOVER / LOCKOUT STATE: Operator in Control (Shield Removed)
+// ============================================================================
+function renderTakeoverUI(sessionTitle) {
+    const root = getOrCreateRootContainer();
+    root.innerHTML = "";
+    isShieldActive = false; // Disable keyboard and click shielding
+
+    // Subtle Amber/Red Border to signify human intervention lockout
+    const lockFrame = document.createElement("div");
+    lockFrame.style.cssText = `
+        position: absolute !important;
+        top: 0 !important;
+        left: 0 !important;
+        right: 0 !important;
+        bottom: 0 !important;
+        pointer-events: none !important;
+        border: 2px dashed rgba(234, 67, 53, 0.5) !important;
+        box-sizing: border-box !important;
+    `;
+    root.appendChild(lockFrame);
+
+    const pill = document.createElement("div");
+    pill.id = "ab-takeover-pill";
+    pill.style.cssText = `
+        position: absolute !important;
+        bottom: 24px !important;
+        left: 50% !important;
+        transform: translate(-50%, 0) !important;
+        z-index: 2147483647 !important;
+        pointer-events: auto !important;
+        background: rgba(18, 14, 28, 0.95) !important;
+        backdrop-filter: blur(16px) !important;
+        -webkit-backdrop-filter: blur(16px) !important;
+        border: 1px solid rgba(234, 67, 53, 0.35) !important;
+        border-radius: 32px !important;
+        padding: 8px 16px !important;
+        color: #E2DDF0 !important;
+        display: flex !important;
+        align-items: center !important;
+        gap: 14px !important;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6), 0 0 16px rgba(234, 67, 53, 0.25) !important;
+        animation: agentBroFadeInUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) !important;
+        box-sizing: border-box !important;
+    `;
+
+    // Red Lock Status Dot
+    const dot = document.createElement("span");
+    dot.style.cssText = `
+        width: 8px !important;
+        height: 8px !important;
+        background: #EA4335 !important;
+        border-radius: 50% !important;
+        box-shadow: 0 0 8px #EA4335 !important;
+        display: inline-block !important;
+    `;
+
+    const label = document.createElement("div");
+    label.style.cssText = `
+        font-weight: 600 !important;
+        color: #FFCDD2 !important;
+        font-size: 12.5px !important;
+    `;
+    label.innerHTML = `<span>🔒 Operator Takeover Active</span>`;
+
+    const btnGroup = document.createElement("div");
+    btnGroup.style.cssText = `display: flex !important; align-items: center !important; gap: 8px !important;`;
+
+    // Stop button
+    const stopBtn = document.createElement("button");
+    stopBtn.className = "ab-btn";
+    stopBtn.innerHTML = "<span>⏹</span> <span>Stop</span>";
+    stopBtn.style.cssText += `
+        background: rgba(255, 255, 255, 0.08) !important;
+        border: 1px solid rgba(255, 255, 255, 0.12) !important;
+        color: #e0e0e0 !important;
+    `;
+    stopBtn.onclick = () => {
+        chrome.runtime.sendMessage({ type: "page_stop" });
+        removeAllUI();
+    };
+
+    // Release / Resume button
     const resumeBtn = document.createElement("button");
-    resumeBtn.innerText = "Resume";
-    resumeBtn.style.cssText = getButtonStyle("#34a853", "#248a3d");
+    resumeBtn.className = "ab-btn";
+    resumeBtn.innerHTML = "<span>▶</span> <span>Release to Agent</span>";
+    resumeBtn.style.cssText += `
+        background: linear-gradient(135deg, #2e7d32, #34a853) !important;
+        color: #ffffff !important;
+        box-shadow: 0 2px 8px rgba(52, 168, 83, 0.35) !important;
+    `;
     resumeBtn.onclick = () => {
         renderNotesModal(sessionTitle);
     };
 
-    btnContainer.appendChild(stopBtn);
-    btnContainer.appendChild(resumeBtn);
+    btnGroup.appendChild(stopBtn);
+    btnGroup.appendChild(resumeBtn);
 
-    hermesControlPill.appendChild(indicator);
-    hermesControlPill.appendChild(labelText);
-    hermesControlPill.appendChild(btnContainer);
+    pill.appendChild(dot);
+    pill.appendChild(label);
+    pill.appendChild(btnGroup);
 
-    document.documentElement.appendChild(hermesControlPill);
+    root.appendChild(pill);
 }
 
-// 3. NOTES MODAL STATE: Input card to submit logs to the agent
+// ============================================================================
+// 3. HANDOFF NOTES MODAL
+// ============================================================================
 function renderNotesModal(sessionTitle) {
-    removeNotesModal();
+    const root = getOrCreateRootContainer();
 
-    hermesNotesModal = document.createElement("div");
-    hermesNotesModal.id = "hermes-notes-modal";
-    hermesNotesModal.style.cssText = `
-        position: fixed !important;
-        top: 50% !important;
-        left: 50% !important;
-        transform: translate(-50%, -50%) !important;
+    // Remove any existing modal
+    const existingModal = document.getElementById("ab-notes-overlay");
+    if (existingModal) existingModal.remove();
+
+    const overlay = document.createElement("div");
+    overlay.id = "ab-notes-overlay";
+    overlay.style.cssText = `
+        position: absolute !important;
+        top: 0 !important;
+        left: 0 !important;
+        right: 0 !important;
+        bottom: 0 !important;
+        background: rgba(0, 0, 0, 0.6) !important;
+        backdrop-filter: blur(4px) !important;
+        -webkit-backdrop-filter: blur(4px) !important;
         z-index: 2147483647 !important;
-        width: 380px !important;
-        background: rgba(15, 12, 27, 0.95) !important;
-        border: 1px solid rgba(255, 255, 255, 0.12) !important;
-        border-radius: 12px !important;
-        padding: 20px !important;
+        pointer-events: auto !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+    `;
+
+    const modal = document.createElement("div");
+    modal.id = "ab-notes-card";
+    modal.style.cssText = `
+        width: 420px !important;
+        max-width: 90vw !important;
+        background: rgba(20, 16, 34, 0.95) !important;
+        backdrop-filter: blur(20px) !important;
+        -webkit-backdrop-filter: blur(20px) !important;
+        border: 1px solid rgba(255, 255, 255, 0.15) !important;
+        border-radius: 16px !important;
+        padding: 22px !important;
         color: #E2DDF0 !important;
-        font-family: system-ui, -apple-system, sans-serif !important;
-        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.7), 0 0 20px rgba(187, 134, 252, 0.15) !important;
-        backdrop-filter: blur(16px) !important;
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8), 0 0 24px rgba(187, 134, 252, 0.2) !important;
+        animation: agentBroModalFadeIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) !important;
         box-sizing: border-box !important;
     `;
 
     const title = document.createElement("h3");
-    title.innerText = "Let Agent know what you've changed";
+    title.innerText = "Handoff Notes to Agent";
     title.style.cssText = `
         margin: 0 0 6px 0 !important;
-        font-size: 15px !important;
-        font-weight: 800 !important;
-        color: #D3B9FF !important;
+        font-size: 16px !important;
+        font-weight: 700 !important;
+        color: #FFFFFF !important;
     `;
 
     const desc = document.createElement("p");
-    desc.innerText = "Summarize your browser actions to help Agent work smoothly.";
+    desc.innerText = "Briefly describe what you completed or changed so the agent can adapt smoothly:";
     desc.style.cssText = `
         margin: 0 0 14px 0 !important;
-        font-size: 11px !important;
+        font-size: 12px !important;
         color: #A69EBA !important;
         line-height: 1.4 !important;
     `;
 
     const textarea = document.createElement("textarea");
-    textarea.placeholder = "This message will be sent to the Agent...";
+    textarea.placeholder = "e.g. Solved CAPTCHA and navigated to checkout page...";
     textarea.style.cssText = `
         width: 100% !important;
-        height: 72px !important;
+        height: 80px !important;
         box-sizing: border-box !important;
-        background: rgba(25, 18, 41, 0.6) !important;
-        color: white !important;
-        border: 1px solid rgba(255, 255, 255, 0.1) !important;
-        border-radius: 6px !important;
-        padding: 8px !important;
-        font-size: 12px !important;
+        background: rgba(28, 22, 48, 0.8) !important;
+        color: #FFFFFF !important;
+        border: 1px solid rgba(255, 255, 255, 0.15) !important;
+        border-radius: 8px !important;
+        padding: 10px !important;
+        font-size: 12.5px !important;
         font-family: inherit !important;
         resize: none !important;
-        margin-bottom: 16px !important;
+        margin-bottom: 18px !important;
         outline: none !important;
+        transition: border-color 0.2s, box-shadow 0.2s !important;
     `;
     textarea.onfocus = () => {
         textarea.style.borderColor = "#BB86FC";
-        textarea.style.boxShadow = "0 0 6px rgba(187, 134, 252, 0.3)";
+        textarea.style.boxShadow = "0 0 8px rgba(187, 134, 252, 0.3)";
+    };
+    textarea.onblur = () => {
+        textarea.style.borderColor = "rgba(255, 255, 255, 0.15)";
+        textarea.style.boxShadow = "none";
     };
 
     const actionContainer = document.createElement("div");
     actionContainer.style.cssText = `
         display: flex !important;
         justify-content: flex-end !important;
-        gap: 8px !important;
+        gap: 10px !important;
     `;
 
     const cancelBtn = document.createElement("button");
+    cancelBtn.className = "ab-btn";
     cancelBtn.innerText = "Cancel";
-    cancelBtn.style.cssText = getButtonStyle("#333", "#222") + "border: 1px solid rgba(255,255,255,0.08) !important;";
+    cancelBtn.style.cssText += `
+        background: rgba(255, 255, 255, 0.08) !important;
+        border: 1px solid rgba(255, 255, 255, 0.1) !important;
+        color: #CCCCCC !important;
+    `;
     cancelBtn.onclick = () => {
-        removeNotesModal();
+        overlay.remove();
     };
 
     const sendBtn = document.createElement("button");
-    sendBtn.innerText = "Send and continue";
-    sendBtn.style.cssText = getButtonStyle("#34a853", "#248a3d");
+    sendBtn.className = "ab-btn";
+    sendBtn.innerHTML = "<span>🚀</span> <span>Release & Continue</span>";
+    sendBtn.style.cssText += `
+        background: linear-gradient(135deg, #2e7d32, #34a853) !important;
+        color: #FFFFFF !important;
+        box-shadow: 0 2px 10px rgba(52, 168, 83, 0.4) !important;
+    `;
     sendBtn.onclick = () => {
         const text = textarea.value.trim();
-        // Send resume message
-        chrome.runtime.sendMessage({ 
-            type: "page_resume", 
-            notes: text || "Resumed by human operator." 
+        chrome.runtime.sendMessage({
+            type: "page_resume",
+            notes: text || "Control released by operator."
         });
         removeAllUI();
     };
@@ -292,129 +601,24 @@ function renderNotesModal(sessionTitle) {
     actionContainer.appendChild(cancelBtn);
     actionContainer.appendChild(sendBtn);
 
-    hermesNotesModal.appendChild(title);
-    hermesNotesModal.appendChild(desc);
-    hermesNotesModal.appendChild(textarea);
-    hermesNotesModal.appendChild(actionContainer);
+    modal.appendChild(title);
+    modal.appendChild(desc);
+    modal.appendChild(textarea);
+    modal.appendChild(actionContainer);
 
-    document.documentElement.appendChild(hermesNotesModal);
-    textarea.focus();
+    overlay.appendChild(modal);
+    root.appendChild(overlay);
+
+    setTimeout(() => textarea.focus(), 50);
 }
 
-// ============================================================================
-// STYLING SPECIFICATIONS (CSS-IN-JS HELPERS)
-// ============================================================================
-
-function getPillStyle() {
-    return `
-        position: fixed !important;
-        bottom: 24px !important;
-        left: 50% !important;
-        transform: translateX(-50%) !important;
-        z-index: 2147483647 !important;
-        background: rgba(15, 12, 27, 0.95) !important;
-        border: 1px solid rgba(255, 255, 255, 0.12) !important;
-        color: #E2DDF0 !important;
-        padding: 10px 18px !important;
-        border-radius: 50px !important;
-        font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
-        font-size: 13px !important;
-        font-weight: 700 !important;
-        display: flex !important;
-        align-items: center !important;
-        gap: 14px !important;
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6), 0 0 15px rgba(187, 134, 252, 0.2) !important;
-        backdrop-filter: blur(12px) !important;
-        user-select: none !important;
-        box-sizing: border-box !important;
-    `;
+function escapeHtml(str) {
+    if (!str) return "";
+    return str
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
 }
-
-function getButtonStyle(colorStart, colorEnd) {
-    return `
-        background: linear-gradient(90deg, ${colorStart} 0%, ${colorEnd} 100%) !important;
-        color: white !important;
-        border: none !important;
-        padding: 6px 16px !important;
-        border-radius: 50px !important;
-        font-size: 11px !important;
-        font-weight: bold !important;
-        cursor: pointer !important;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.2) !important;
-        transition: all 0.2s !important;
-    `;
-}
-
-// ============================================================================
-// MAIN-WORLD INJECTION (HUMAN INTERACTION EVASION HELPER LIBRARY)
-// ============================================================================
-(function injectMainWorldHelpers() {
-    try {
-        const script = document.createElement("script");
-        script.id = "agent-bro-human-helpers";
-        script.textContent = `
-            window.agentBro = window.agentBro || {};
-            
-            // Jittered scrolling to target Y coordinate
-            window.agentBro.scrollJitter = async function(targetY, maxScrolls = 15) {
-                targetY = targetY || document.documentElement.scrollHeight || document.body.scrollHeight;
-                console.log("[Agent Bro] Initializing human-like scrolling to:", targetY);
-                let currentScrolls = 0;
-                
-                while (window.scrollY < targetY && currentScrolls < maxScrolls) {
-                    const increment = Math.floor(Math.random() * (250 - 100 + 1)) + 100;
-                    window.scrollBy({ top: increment, behavior: "smooth" });
-                    currentScrolls++;
-                    
-                    const delay = Math.floor(Math.random() * (2000 - 1000 + 1)) + 1000;
-                    await new Promise(resolve => setTimeout(resolve, delay));
-                    
-                    if ((window.innerHeight + window.scrollY) >= (document.documentElement.scrollHeight || document.body.scrollHeight)) {
-                        console.log("[Agent Bro] Hit page bottom. Stopping scroll.");
-                        break;
-                    }
-                }
-                return { status: "scrolled", finalY: window.scrollY };
-            };
-
-            // Simulating a realistic hover over a target element
-            window.agentBro.hoverElement = async function(selector) {
-                const el = document.querySelector(selector);
-                if (!el) {
-                    return { status: "error", message: "Element not found for selector: " + selector };
-                }
-                
-                console.log("[Agent Bro] Hovering element:", selector);
-                const rect = el.getBoundingClientRect();
-                
-                const clientX = rect.left + (rect.width / 2) + (Math.random() * (rect.width * 0.2) - (rect.width * 0.1));
-                const clientY = rect.top + (rect.height / 2) + (Math.random() * (rect.height * 0.2) - (rect.height * 0.1));
-
-                const dispatchMouse = (type) => {
-                    const ev = new MouseEvent(type, {
-                        view: window,
-                        bubbles: true,
-                        cancelable: true,
-                        clientX: clientX,
-                        clientY: clientY
-                    });
-                    el.dispatchEvent(ev);
-                };
-
-                dispatchMouse("mouseenter");
-                dispatchMouse("mouseover");
-                dispatchMouse("mousemove");
-
-                const delay = Math.floor(Math.random() * (700 - 300 + 1)) + 300;
-                await new Promise(resolve => setTimeout(resolve, delay));
-
-                return { status: "hovered", selector: selector };
-            };
-        `;
-        document.documentElement.appendChild(script);
-        script.remove();
-    } catch(err) {
-        console.error("[Agent Bro] Failed to inject main-world helpers:", err);
-    }
-})();
 
