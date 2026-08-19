@@ -53,34 +53,34 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 function getThemeColors(colorName) {
     const palette = {
         purple: {
-            borderHex: "#BB86FC",
-            glowColor: "rgba(187, 134, 252, 0.6)",
-            accentGrad: "linear-gradient(135deg, #7b1fa2, #9c27b0)",
-            tagBg: "rgba(187, 134, 252, 0.15)"
+            borderHex: "#9A6DD7",
+            subtleBorder: "rgba(154, 109, 215, 0.45)",
+            tagBg: "rgba(154, 109, 215, 0.08)",
+            tagText: "#9A6DD7"
         },
         blue: {
-            borderHex: "#4285F4",
-            glowColor: "rgba(66, 133, 244, 0.6)",
-            accentGrad: "linear-gradient(135deg, #1976d2, #4285f4)",
-            tagBg: "rgba(66, 133, 244, 0.15)"
+            borderHex: "#529CCA",
+            subtleBorder: "rgba(82, 156, 202, 0.45)",
+            tagBg: "rgba(82, 156, 202, 0.08)",
+            tagText: "#529CCA"
         },
         green: {
-            borderHex: "#34A853",
-            glowColor: "rgba(52, 168, 83, 0.6)",
-            accentGrad: "linear-gradient(135deg, #2e7d32, #34a853)",
-            tagBg: "rgba(52, 168, 83, 0.15)"
+            borderHex: "#4DAB9A",
+            subtleBorder: "rgba(77, 171, 154, 0.45)",
+            tagBg: "rgba(77, 171, 154, 0.08)",
+            tagText: "#4DAB9A"
         },
         orange: {
-            borderHex: "#FF8F00",
-            glowColor: "rgba(255, 143, 0, 0.6)",
-            accentGrad: "linear-gradient(135deg, #ef6c00, #ff8f00)",
-            tagBg: "rgba(255, 143, 0, 0.15)"
+            borderHex: "#FFAB40",
+            subtleBorder: "rgba(255, 171, 64, 0.45)",
+            tagBg: "rgba(255, 171, 64, 0.08)",
+            tagText: "#FFAB40"
         },
         red: {
-            borderHex: "#EA4335",
-            glowColor: "rgba(234, 67, 53, 0.6)",
-            accentGrad: "linear-gradient(135deg, #c62828, #ea4335)",
-            tagBg: "rgba(234, 67, 53, 0.15)"
+            borderHex: "#FF7369",
+            subtleBorder: "rgba(255, 115, 105, 0.45)",
+            tagBg: "rgba(255, 115, 105, 0.08)",
+            tagText: "#FF7369"
         }
     };
     return palette[colorName] || palette.purple;
@@ -104,10 +104,11 @@ function getOrCreateRootContainer() {
             height: 100vh !important;
             pointer-events: none !important;
             z-index: 2147483647 !important;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important;
-            font-size: 13px !important;
+            font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif !important;
+            font-size: 12px !important;
             line-height: 1.4 !important;
             box-sizing: border-box !important;
+            -webkit-font-smoothing: antialiased !important;
         `;
         const host = document.body || document.documentElement;
         host.appendChild(root);
@@ -131,57 +132,37 @@ function injectGlobalStyles() {
     const style = document.createElement("style");
     style.id = "agent-bro-hud-styles";
     style.textContent = `
-        @keyframes agentBroGlowPulse {
-            0% { 
-                box-shadow: inset 0 0 20px 4px var(--ab-glow-color, rgba(66, 133, 244, 0.4)), 0 0 12px 2px var(--ab-glow-color, rgba(66, 133, 244, 0.4)); 
-            }
-            100% { 
-                box-shadow: inset 0 0 40px 10px var(--ab-glow-color, rgba(66, 133, 244, 0.75)), 0 0 24px 6px var(--ab-glow-color, rgba(66, 133, 244, 0.6)); 
-            }
-        }
-        @keyframes agentBroDotPing {
-            0% { transform: scale(1); opacity: 1; }
-            50% { transform: scale(1.4); opacity: 0.6; }
-            100% { transform: scale(1); opacity: 1; }
-        }
         @keyframes agentBroFadeInUp {
-            from { opacity: 0; transform: translate(-50%, 16px); }
+            from { opacity: 0; transform: translate(-50%, 8px); }
             to { opacity: 1; transform: translate(-50%, 0); }
         }
         @keyframes agentBroModalFadeIn {
-            from { opacity: 0; transform: translate(-50%, -46%); }
-            to { opacity: 1; transform: translate(-50%, -50%); }
+            from { opacity: 0; transform: scale(0.96); }
+            to { opacity: 1; transform: scale(1); }
         }
         .ab-btn {
-            font-family: inherit !important;
-            font-size: 12px !important;
-            font-weight: 600 !important;
-            padding: 6px 14px !important;
-            border-radius: 20px !important;
+            font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif !important;
+            font-size: 11.5px !important;
+            font-weight: 500 !important;
+            padding: 4px 10px !important;
+            border-radius: 4px !important;
             cursor: pointer !important;
-            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+            transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease !important;
             display: inline-flex !important;
             align-items: center !important;
-            gap: 6px !important;
+            gap: 5px !important;
             pointer-events: auto !important;
             user-select: none !important;
             outline: none !important;
-            border: none !important;
-        }
-        .ab-btn:hover {
-            transform: translateY(-1px) !important;
-            filter: brightness(1.1) !important;
-        }
-        .ab-btn:active {
-            transform: translateY(0px) !important;
-            filter: brightness(0.95) !important;
+            border: 1px solid transparent !important;
+            box-sizing: border-box !important;
         }
     `;
     document.head.appendChild(style);
 }
 
 // ============================================================================
-// 1. ACTIVE RUNNING STATE: Viewport Glow & Floating HUD Pill & Shield
+// 1. ACTIVE RUNNING STATE: Viewport Frame & Floating HUD Pill & Shield
 // ============================================================================
 function renderActiveGlow(sessionTitle, groupColor) {
     const root = getOrCreateRootContainer();
@@ -190,9 +171,8 @@ function renderActiveGlow(sessionTitle, groupColor) {
     isTakeoverActive = false;
 
     const theme = getThemeColors(groupColor);
-    root.style.setProperty("--ab-glow-color", theme.glowColor);
 
-    // A. Full Viewport Border Glow
+    // A. Full Viewport Border Frame (Clean Notion-style Accent Outline)
     const glowFrame = document.createElement("div");
     glowFrame.id = "ab-glow-frame";
     glowFrame.style.cssText = `
@@ -202,15 +182,14 @@ function renderActiveGlow(sessionTitle, groupColor) {
         right: 0 !important;
         bottom: 0 !important;
         pointer-events: none !important;
-        border: 3.5px solid ${theme.borderHex} !important;
-        box-shadow: inset 0 0 24px 6px ${theme.glowColor}, 0 0 16px 2px ${theme.glowColor} !important;
-        animation: agentBroGlowPulse 2.2s infinite alternate ease-in-out !important;
+        border: 2px solid ${theme.borderHex} !important;
+        box-shadow: inset 0 0 12px rgba(0, 0, 0, 0.25) !important;
         box-sizing: border-box !important;
         z-index: 2147483645 !important;
     `;
     root.appendChild(glowFrame);
 
-    // B. Interaction Shield Overlay (Blocks accidental clicks, scrolls, selection on host page)
+    // B. Interaction Shield Overlay
     const shield = document.createElement("div");
     shield.id = "ab-interaction-shield";
     shield.style.cssText = `
@@ -222,7 +201,7 @@ function renderActiveGlow(sessionTitle, groupColor) {
         z-index: 2147483646 !important;
         pointer-events: auto !important;
         cursor: not-allowed !important;
-        background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.02) 60%, ${theme.tagBg} 100%) !important;
+        background: rgba(0, 0, 0, 0.03) !important;
     `;
 
     // Intercept mouse interactions and show helpful takeover tooltip
@@ -243,36 +222,33 @@ function renderActiveGlow(sessionTitle, groupColor) {
     pill.id = "ab-control-pill";
     pill.style.cssText = `
         position: absolute !important;
-        bottom: 24px !important;
+        bottom: 20px !important;
         left: 50% !important;
         transform: translate(-50%, 0) !important;
         z-index: 2147483647 !important;
         pointer-events: auto !important;
-        background: rgba(15, 12, 27, 0.9) !important;
-        backdrop-filter: blur(16px) !important;
-        -webkit-backdrop-filter: blur(16px) !important;
-        border: 1px solid rgba(255, 255, 255, 0.12) !important;
-        border-radius: 32px !important;
-        padding: 8px 16px !important;
-        color: #E2DDF0 !important;
+        background: #202020 !important;
+        border: 1px solid #333333 !important;
+        border-radius: 6px !important;
+        padding: 5px 10px !important;
+        color: #e3e2de !important;
         display: flex !important;
         align-items: center !important;
-        gap: 12px !important;
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 16px ${theme.glowColor} !important;
-        animation: agentBroFadeInUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) !important;
+        gap: 10px !important;
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45) !important;
+        animation: agentBroFadeInUp 0.2s ease-out !important;
         box-sizing: border-box !important;
     `;
 
     // Dot indicator
     const dot = document.createElement("span");
     dot.style.cssText = `
-        width: 8px !important;
-        height: 8px !important;
+        width: 7px !important;
+        height: 7px !important;
         background: ${theme.borderHex} !important;
         border-radius: 50% !important;
-        box-shadow: 0 0 8px ${theme.borderHex} !important;
-        animation: agentBroDotPing 1.8s infinite ease-in-out !important;
         display: inline-block !important;
+        flex-shrink: 0 !important;
     `;
 
     // Title label
@@ -281,25 +257,26 @@ function renderActiveGlow(sessionTitle, groupColor) {
         display: flex !important;
         align-items: center !important;
         gap: 6px !important;
-        font-weight: 600 !important;
-        color: #FFFFFF !important;
-        font-size: 12.5px !important;
+        font-weight: 500 !important;
+        color: #EDEDED !important;
+        font-size: 12px !important;
     `;
-    label.innerHTML = `<span style="opacity: 0.85;">🤖</span> <span>${escapeHtml(sessionTitle)}</span> <span style="font-size: 11px; opacity: 0.6; font-weight: 400;">is active</span>`;
+    label.innerHTML = `<span>🤖</span> <span>${escapeHtml(sessionTitle)}</span> <span style="font-size: 11px; color: #8F8E8B; font-weight: 400;">is active</span>`;
 
     // Action buttons container
     const btnGroup = document.createElement("div");
-    btnGroup.style.cssText = `display: flex !important; align-items: center !important; gap: 8px !important; margin-left: 4px !important;`;
+    btnGroup.style.cssText = `display: flex !important; align-items: center !important; gap: 6px !important; margin-left: 4px !important;`;
 
     // Take Over button
     const takeoverBtn = document.createElement("button");
     takeoverBtn.className = "ab-btn";
     takeoverBtn.innerHTML = "<span>✋</span> <span>Take Over</span>";
     takeoverBtn.style.cssText += `
-        background: linear-gradient(135deg, #d32f2f, #ea4335) !important;
+        background: #eb5757 !important;
         color: #ffffff !important;
-        box-shadow: 0 2px 8px rgba(234, 67, 53, 0.35) !important;
     `;
+    takeoverBtn.onmouseenter = () => { takeoverBtn.style.background = "#d84343"; };
+    takeoverBtn.onmouseleave = () => { takeoverBtn.style.background = "#eb5757"; };
     takeoverBtn.onclick = () => {
         renderTakeoverUI(sessionTitle);
         chrome.runtime.sendMessage({
@@ -313,10 +290,12 @@ function renderActiveGlow(sessionTitle, groupColor) {
     stopBtn.className = "ab-btn";
     stopBtn.innerHTML = "<span>⏹</span> <span>Stop</span>";
     stopBtn.style.cssText += `
-        background: rgba(255, 255, 255, 0.08) !important;
-        border: 1px solid rgba(255, 255, 255, 0.12) !important;
-        color: #e0e0e0 !important;
+        background: #282828 !important;
+        border: 1px solid #333333 !important;
+        color: #9b9b9b !important;
     `;
+    stopBtn.onmouseenter = () => { stopBtn.style.background = "#303030"; stopBtn.style.color = "#e3e2de"; };
+    stopBtn.onmouseleave = () => { stopBtn.style.background = "#282828"; stopBtn.style.color = "#9b9b9b"; };
     stopBtn.onclick = () => {
         chrome.runtime.sendMessage({ type: "page_stop" });
         removeAllUI();
@@ -344,29 +323,26 @@ function showInterventionTooltip(x, y) {
         root.appendChild(tooltip);
     }
 
-    const safeTop = Math.min(Math.max(y - 50, 20), window.innerHeight - 80);
-    const safeLeft = Math.min(Math.max(x - 140, 20), window.innerWidth - 320);
+    const safeTop = Math.min(Math.max(y - 45, 16), window.innerHeight - 70);
+    const safeLeft = Math.min(Math.max(x - 130, 16), window.innerWidth - 300);
 
     tooltip.style.cssText = `
         position: fixed !important;
         top: ${safeTop}px !important;
         left: ${safeLeft}px !important;
         z-index: 2147483647 !important;
-        background: rgba(20, 16, 36, 0.95) !important;
-        border: 1px solid rgba(187, 134, 252, 0.4) !important;
-        color: #F1EDFA !important;
-        padding: 8px 14px !important;
-        border-radius: 12px !important;
-        font-size: 12px !important;
-        font-weight: 500 !important;
-        box-shadow: 0 10px 30px rgba(0,0,0,0.6), 0 0 14px rgba(187, 134, 252, 0.25) !important;
-        backdrop-filter: blur(14px) !important;
-        -webkit-backdrop-filter: blur(14px) !important;
+        background: #202020 !important;
+        border: 1px solid #333333 !important;
+        color: #e3e2de !important;
+        padding: 6px 12px !important;
+        border-radius: 5px !important;
+        font-size: 11.5px !important;
+        font-weight: 400 !important;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4) !important;
         pointer-events: none !important;
-        animation: agentBroFadeInUp 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
         display: flex !important;
         align-items: center !important;
-        gap: 8px !important;
+        gap: 6px !important;
     `;
     tooltip.innerHTML = `<span>🤖</span> <span>Agent is operating. Click <b>'Take Over'</b> below to interact.</span>`;
 
@@ -385,7 +361,7 @@ function renderTakeoverUI(sessionTitle) {
     isShieldActive = false; // Disable keyboard and click shielding
     isTakeoverActive = true;
 
-    // Subtle Amber/Red Border to signify human intervention lockout
+    // Subtle Notion Red Dashed Border to signify operator takeover
     const lockFrame = document.createElement("div");
     lockFrame.style.cssText = `
         position: absolute !important;
@@ -394,7 +370,7 @@ function renderTakeoverUI(sessionTitle) {
         right: 0 !important;
         bottom: 0 !important;
         pointer-events: none !important;
-        border: 2px dashed rgba(234, 67, 53, 0.5) !important;
+        border: 2px dashed rgba(235, 87, 87, 0.5) !important;
         box-sizing: border-box !important;
     `;
     root.appendChild(lockFrame);
@@ -403,57 +379,57 @@ function renderTakeoverUI(sessionTitle) {
     pill.id = "ab-takeover-pill";
     pill.style.cssText = `
         position: absolute !important;
-        bottom: 24px !important;
+        bottom: 20px !important;
         left: 50% !important;
         transform: translate(-50%, 0) !important;
         z-index: 2147483647 !important;
         pointer-events: auto !important;
-        background: rgba(18, 14, 28, 0.95) !important;
-        backdrop-filter: blur(16px) !important;
-        -webkit-backdrop-filter: blur(16px) !important;
-        border: 1px solid rgba(234, 67, 53, 0.35) !important;
-        border-radius: 32px !important;
-        padding: 8px 16px !important;
-        color: #E2DDF0 !important;
+        background: #202020 !important;
+        border: 1px solid #4a2729 !important;
+        border-radius: 6px !important;
+        padding: 5px 10px !important;
+        color: #e3e2de !important;
         display: flex !important;
         align-items: center !important;
-        gap: 14px !important;
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6), 0 0 16px rgba(234, 67, 53, 0.25) !important;
-        animation: agentBroFadeInUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) !important;
+        gap: 10px !important;
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45) !important;
+        animation: agentBroFadeInUp 0.2s ease-out !important;
         box-sizing: border-box !important;
     `;
 
     // Red Lock Status Dot
     const dot = document.createElement("span");
     dot.style.cssText = `
-        width: 8px !important;
-        height: 8px !important;
-        background: #EA4335 !important;
+        width: 7px !important;
+        height: 7px !important;
+        background: #ff7369 !important;
         border-radius: 50% !important;
-        box-shadow: 0 0 8px #EA4335 !important;
         display: inline-block !important;
+        flex-shrink: 0 !important;
     `;
 
     const label = document.createElement("div");
     label.style.cssText = `
-        font-weight: 600 !important;
-        color: #FFCDD2 !important;
-        font-size: 12.5px !important;
+        font-weight: 500 !important;
+        color: #ff7369 !important;
+        font-size: 12px !important;
     `;
-    label.innerHTML = `<span>🔒 Operator Takeover Active</span>`;
+    label.innerHTML = `<span>🔒 Operator Active</span>`;
 
     const btnGroup = document.createElement("div");
-    btnGroup.style.cssText = `display: flex !important; align-items: center !important; gap: 8px !important;`;
+    btnGroup.style.cssText = `display: flex !important; align-items: center !important; gap: 6px !important;`;
 
     // Stop button
     const stopBtn = document.createElement("button");
     stopBtn.className = "ab-btn";
     stopBtn.innerHTML = "<span>⏹</span> <span>Stop</span>";
     stopBtn.style.cssText += `
-        background: rgba(255, 255, 255, 0.08) !important;
-        border: 1px solid rgba(255, 255, 255, 0.12) !important;
-        color: #e0e0e0 !important;
+        background: #282828 !important;
+        border: 1px solid #333333 !important;
+        color: #9b9b9b !important;
     `;
+    stopBtn.onmouseenter = () => { stopBtn.style.background = "#303030"; stopBtn.style.color = "#e3e2de"; };
+    stopBtn.onmouseleave = () => { stopBtn.style.background = "#282828"; stopBtn.style.color = "#9b9b9b"; };
     stopBtn.onclick = () => {
         chrome.runtime.sendMessage({ type: "page_stop" });
         removeAllUI();
@@ -464,10 +440,11 @@ function renderTakeoverUI(sessionTitle) {
     resumeBtn.className = "ab-btn";
     resumeBtn.innerHTML = "<span>▶</span> <span>Release to Agent</span>";
     resumeBtn.style.cssText += `
-        background: linear-gradient(135deg, #2e7d32, #34a853) !important;
+        background: #0f7b6c !important;
         color: #ffffff !important;
-        box-shadow: 0 2px 8px rgba(52, 168, 83, 0.35) !important;
     `;
+    resumeBtn.onmouseenter = () => { resumeBtn.style.background = "#0b675a"; };
+    resumeBtn.onmouseleave = () => { resumeBtn.style.background = "#0f7b6c"; };
     resumeBtn.onclick = () => {
         renderNotesModal(sessionTitle);
     };
@@ -501,8 +478,6 @@ function renderNotesModal(sessionTitle) {
         right: 0 !important;
         bottom: 0 !important;
         background: rgba(0, 0, 0, 0.6) !important;
-        backdrop-filter: blur(4px) !important;
-        -webkit-backdrop-filter: blur(4px) !important;
         z-index: 2147483647 !important;
         pointer-events: auto !important;
         display: flex !important;
@@ -513,17 +488,15 @@ function renderNotesModal(sessionTitle) {
     const modal = document.createElement("div");
     modal.id = "ab-notes-card";
     modal.style.cssText = `
-        width: 420px !important;
+        width: 380px !important;
         max-width: 90vw !important;
-        background: rgba(20, 16, 34, 0.95) !important;
-        backdrop-filter: blur(20px) !important;
-        -webkit-backdrop-filter: blur(20px) !important;
-        border: 1px solid rgba(255, 255, 255, 0.15) !important;
-        border-radius: 16px !important;
-        padding: 22px !important;
-        color: #E2DDF0 !important;
-        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8), 0 0 24px rgba(187, 134, 252, 0.2) !important;
-        animation: agentBroModalFadeIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) !important;
+        background: #202020 !important;
+        border: 1px solid #2f2f2f !important;
+        border-radius: 8px !important;
+        padding: 20px !important;
+        color: #e3e2de !important;
+        box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6) !important;
+        animation: agentBroModalFadeIn 0.15s ease-out !important;
         box-sizing: border-box !important;
     `;
 
@@ -531,17 +504,17 @@ function renderNotesModal(sessionTitle) {
     title.innerText = "Handoff Notes to Agent";
     title.style.cssText = `
         margin: 0 0 6px 0 !important;
-        font-size: 16px !important;
-        font-weight: 700 !important;
-        color: #FFFFFF !important;
+        font-size: 14px !important;
+        font-weight: 600 !important;
+        color: #ffffff !important;
     `;
 
     const desc = document.createElement("p");
-    desc.innerText = "Briefly describe what you completed or changed so the agent can adapt smoothly:";
+    desc.innerText = "Describe what you completed so the agent can adapt smoothly:";
     desc.style.cssText = `
-        margin: 0 0 14px 0 !important;
+        margin: 0 0 12px 0 !important;
         font-size: 12px !important;
-        color: #A69EBA !important;
+        color: #9b9b9b !important;
         line-height: 1.4 !important;
     `;
 
@@ -549,26 +522,26 @@ function renderNotesModal(sessionTitle) {
     textarea.placeholder = "e.g. Solved CAPTCHA and navigated to checkout page...";
     textarea.style.cssText = `
         width: 100% !important;
-        height: 80px !important;
+        height: 72px !important;
         box-sizing: border-box !important;
-        background: rgba(28, 22, 48, 0.8) !important;
-        color: #FFFFFF !important;
-        border: 1px solid rgba(255, 255, 255, 0.15) !important;
-        border-radius: 8px !important;
-        padding: 10px !important;
-        font-size: 12.5px !important;
+        background: #191919 !important;
+        color: #e3e2de !important;
+        border: 1px solid #333333 !important;
+        border-radius: 5px !important;
+        padding: 8px 10px !important;
+        font-size: 12px !important;
         font-family: inherit !important;
         resize: none !important;
-        margin-bottom: 18px !important;
+        margin-bottom: 14px !important;
         outline: none !important;
-        transition: border-color 0.2s, box-shadow 0.2s !important;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease !important;
     `;
     textarea.onfocus = () => {
-        textarea.style.borderColor = "#BB86FC";
-        textarea.style.boxShadow = "0 0 8px rgba(187, 134, 252, 0.3)";
+        textarea.style.borderColor = "#2383e2";
+        textarea.style.boxShadow = "0 0 0 2px rgba(35, 131, 226, 0.2)";
     };
     textarea.onblur = () => {
-        textarea.style.borderColor = "rgba(255, 255, 255, 0.15)";
+        textarea.style.borderColor = "#333333";
         textarea.style.boxShadow = "none";
     };
 
@@ -576,29 +549,32 @@ function renderNotesModal(sessionTitle) {
     actionContainer.style.cssText = `
         display: flex !important;
         justify-content: flex-end !important;
-        gap: 10px !important;
+        gap: 8px !important;
     `;
 
     const cancelBtn = document.createElement("button");
     cancelBtn.className = "ab-btn";
     cancelBtn.innerText = "Cancel";
     cancelBtn.style.cssText += `
-        background: rgba(255, 255, 255, 0.08) !important;
-        border: 1px solid rgba(255, 255, 255, 0.1) !important;
-        color: #CCCCCC !important;
+        background: #282828 !important;
+        border: 1px solid #333333 !important;
+        color: #9b9b9b !important;
     `;
+    cancelBtn.onmouseenter = () => { cancelBtn.style.background = "#303030"; cancelBtn.style.color = "#e3e2de"; };
+    cancelBtn.onmouseleave = () => { cancelBtn.style.background = "#282828"; cancelBtn.style.color = "#9b9b9b"; };
     cancelBtn.onclick = () => {
         overlay.remove();
     };
 
     const sendBtn = document.createElement("button");
     sendBtn.className = "ab-btn";
-    sendBtn.innerHTML = "<span>🚀</span> <span>Release & Continue</span>";
+    sendBtn.innerHTML = "<span>Release & Continue</span>";
     sendBtn.style.cssText += `
-        background: linear-gradient(135deg, #2e7d32, #34a853) !important;
+        background: #0f7b6c !important;
         color: #FFFFFF !important;
-        box-shadow: 0 2px 10px rgba(52, 168, 83, 0.4) !important;
     `;
+    sendBtn.onmouseenter = () => { sendBtn.style.background = "#0b675a"; };
+    sendBtn.onmouseleave = () => { sendBtn.style.background = "#0f7b6c"; };
     sendBtn.onclick = () => {
         const text = textarea.value.trim();
         chrome.runtime.sendMessage({
