@@ -34,8 +34,10 @@ document.addEventListener("DOMContentLoaded", () => {
     let isHumanMode = false;
     let serverStatuses = {};
 
+    const MT = (typeof MessageTypes !== "undefined") ? MessageTypes : (window.BroProtocol ? window.BroProtocol.MessageTypes : {});
+
     // 1. Initial State Sync
-    chrome.runtime.sendMessage({ type: "get_state" }, (response) => {
+    chrome.runtime.sendMessage({ type: MT.GET_STATE || "get_state" }, (response) => {
         if (response) {
             updateUI(response.humanInControl);
         }
@@ -43,7 +45,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Listen for state changes pushed from background
     chrome.runtime.onMessage.addListener((message) => {
-        if (message.type === "state_changed") {
+        if (message.type === (MT.STATE_CHANGED || "state_changed")) {
             updateUI(message.humanInControl);
         }
     });
@@ -78,7 +80,7 @@ document.addEventListener("DOMContentLoaded", () => {
     actionBtn.addEventListener("click", () => {
         const notes = interventionNotes.value.trim();
         chrome.runtime.sendMessage({ 
-            type: "toggle_mode", 
+            type: MT.TOGGLE_MODE || "toggle_mode", 
             human_intervention_notes: notes 
         }, (response) => {
             if (response) {
@@ -226,7 +228,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 addServerForm.style.display = "none";
                 serverNameInput.value = "";
                 serverUrlInput.value = "";
-                chrome.runtime.sendMessage({ type: "reload_connections" });
+                chrome.runtime.sendMessage({ type: MT.RELOAD_CONNECTIONS || "reload_connections" });
             });
         });
     });
@@ -265,7 +267,7 @@ document.addEventListener("DOMContentLoaded", () => {
             chrome.storage.local.set({ agent_servers: servers }, () => {
                 loadAndRenderServers();
                 editServerForm.style.display = "none";
-                chrome.runtime.sendMessage({ type: "reload_connections" });
+                chrome.runtime.sendMessage({ type: MT.RELOAD_CONNECTIONS || "reload_connections" });
             });
         });
     });
@@ -278,7 +280,7 @@ document.addEventListener("DOMContentLoaded", () => {
             chrome.storage.local.set({ agent_servers: servers }, () => {
                 loadAndRenderServers();
                 editServerForm.style.display = "none";
-                chrome.runtime.sendMessage({ type: "reload_connections" });
+                chrome.runtime.sendMessage({ type: MT.RELOAD_CONNECTIONS || "reload_connections" });
             });
         });
     });
@@ -288,7 +290,7 @@ document.addEventListener("DOMContentLoaded", () => {
         scanAgentsBtn.innerText = "Scanning ports...";
         scanAgentsBtn.disabled = true;
 
-        chrome.runtime.sendMessage({ type: "scan_local_agents" }, (response) => {
+        chrome.runtime.sendMessage({ type: MT.SCAN_LOCAL_AGENTS || "scan_local_agents" }, (response) => {
             scanAgentsBtn.innerText = "🔍 Scan for Agents";
             scanAgentsBtn.disabled = false;
             
@@ -315,7 +317,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Connection Poller: pulls active state from service worker
     function pollConnectionStatuses() {
-        chrome.runtime.sendMessage({ type: "get_connection_statuses" }, (response) => {
+        chrome.runtime.sendMessage({ type: MT.GET_CONNECTION_STATUSES || "get_connection_statuses" }, (response) => {
             if (response && response.statuses) {
                 serverStatuses = response.statuses;
                 

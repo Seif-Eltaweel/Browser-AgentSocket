@@ -1,3 +1,8 @@
+"""
+Agent Bro Hands - Server Gateway
+FastAPI WebSocket and HTTP Hub connecting AI Agent frameworks with the Chrome Extension.
+"""
+
 import asyncio
 import json
 import os
@@ -5,39 +10,42 @@ import signal
 import sys
 import time
 from contextlib import asynccontextmanager
-from typing import Literal
+from typing import Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+
+from server.models import (
+    ActionType,
+    WSMessageType,
+    ControlMode,
+    ResponseStatus,
+    ErrorCode,
+    AgentActionPayload,
+    ReleasePayload,
+    StandardResponse,
+    ServerStatusResponse
+)
 
 # Configurable idle timeout (default: 20 minutes = 1200 seconds)
 IDLE_TIMEOUT_SECONDS = float(os.environ.get("BRO_IDLE_TIMEOUT", "1200"))
 PID_FILE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".bro_pid")
 
-class AgentActionPayload(BaseModel):
-    id: str
-    action_type: Literal["navigate", "execute_js", "task_complete"]
-    target_data: str
-    requires_privacy_check: bool
-    session_title: str | None = None
-    group_color: str | None = None
-
-class ReleasePayload(BaseModel):
-    notes: str | None = None
 
 class SystemState:
     def __init__(self):
-        self.extension_ws: WebSocket | None = None
+        self.extension_ws: Optional[WebSocket] = None
         self.human_in_control: bool = False
-        self.last_intervention_notes: str | None = None
+        self.last_intervention_notes: Optional[str] = None
         self.pending_responses: dict[str, asyncio.Future] = {}
         self.last_activity_time: float = time.time()
-        self.watchdog_task: asyncio.Task | None = None
+        self.watchdog_task: Optional[asyncio.Task] = None
 
     def record_activity(self):
         self.last_activity_time = time.time()
 
+
 state = SystemState()
+
 
 def write_pid_file():
     try:
@@ -46,12 +54,14 @@ def write_pid_file():
     except Exception as e:
         print(f"[Watchdog] Warning: Unable to write PID file: {e}")
 
+
 def remove_pid_file():
     try:
         if os.path.exists(PID_FILE_PATH):
             os.remove(PID_FILE_PATH)
     except Exception as e:
         print(f"[Watchdog] Warning: Unable to remove PID file: {e}")
+
 
 async def idle_watchdog_loop():
     print(f"[Watchdog] Auto-idle watchdog started (timeout: {IDLE_TIMEOUT_SECONDS}s / {IDLE_TIMEOUT_SECONDS/60:.1f}m).")
@@ -63,10 +73,10 @@ async def idle_watchdog_loop():
                 print(f"\n[WATCHDOG] Idle duration {idle_duration:.1f}s exceeded limit of {IDLE_TIMEOUT_SECONDS}s.")
                 print("[WATCHDOG] Cleanly shutting down background gateway process...\n")
                 remove_pid_file()
-                # Schedule immediate process termination
                 os._exit(0)
     except asyncio.CancelledError:
         pass
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -74,11 +84,21 @@ async def lifespan(app: FastAPI):
     write_pid_file()
     state.record_activity()
     state.watchdog_task = asyncio.create_task(idle_watchdog_loop())
+    
     yield
+    
     # Shutdown
     if state.watchdog_task and not state.watchdog_task.done():
         state.watchdog_task.cancel()
+    
+    # Abort pending responses
+    for cmd_id, future in list(state.pending_responses.items()):
+        if not future.done():
+            future.set_result({"status": "aborted", "message": "Server shutting down."})
+    state.pending_responses.clear()
+    
     remove_pid_file()
+
 
 app = FastAPI(title="Agent Bro Hands Server Gateway", lifespan=lifespan)
 
@@ -91,6 +111,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.get("/")
 def read_root():
     state.record_activity()
@@ -100,6 +121,7 @@ def read_root():
         "human_in_control": state.human_in_control,
         "idle_seconds_remaining": max(0.0, IDLE_TIMEOUT_SECONDS - (time.time() - state.last_activity_time))
     }
+
 
 @app.get("/status")
 def get_status():
@@ -111,6 +133,7 @@ def get_status():
         "last_intervention_notes": state.last_intervention_notes,
         "idle_seconds_remaining": max(0.0, IDLE_TIMEOUT_SECONDS - (time.time() - state.last_activity_time))
     }
+
 
 @app.websocket("/ws/extension")
 async def extension_endpoint(websocket: WebSocket):
@@ -127,10 +150,10 @@ async def extension_endpoint(websocket: WebSocket):
             message = json.loads(raw_message)
             msg_type = message.get("type")
             
-            if msg_type == "ping":
+            if msg_type == WSMessageType.PING.value or msg_type == "ping":
                 continue
             
-            if msg_type == "state_change":
+            if msg_type == WSMessageType.STATE_CHANGE.value or msg_type == "state_change":
                 new_state = message.get("human_in_control", False)
                 if not new_state and state.human_in_control:
                     print("[Bridge] Info: Extension sent release state. Release must go through the /human_release endpoint.")
@@ -140,7 +163,7 @@ async def extension_endpoint(websocket: WebSocket):
                         state.last_intervention_notes = message.get("notes")
                     print(f"[Bridge] State Sync -> Human In Control: {state.human_in_control}")
             
-            elif msg_type == "command_response":
+            elif msg_type == WSMessageType.COMMAND_RESPONSE.value or msg_type == "command_response":
                 cmd_id = message.get("command_id")
                 if cmd_id in state.pending_responses:
                     state.pending_responses[cmd_id].set_result(message.get("payload"))
@@ -151,6 +174,7 @@ async def extension_endpoint(websocket: WebSocket):
         state.extension_ws = None
         state.record_activity()
 
+
 @app.post("/execute")
 async def execute_to_extension(command: AgentActionPayload):
     state.record_activity()
@@ -158,7 +182,7 @@ async def execute_to_extension(command: AgentActionPayload):
     # Non-blocking check: immediately report lock if human is currently in control
     if state.human_in_control:
         return {
-            "status": "human_locked",
+            "status": ResponseStatus.HUMAN_LOCKED.value,
             "message": "Human operator is currently in control of the browser session.",
             "last_intervention_notes": state.last_intervention_notes,
             "instructions": "Wait for human operator to click 'Release Control' or check GET /status."
@@ -169,16 +193,16 @@ async def execute_to_extension(command: AgentActionPayload):
         injected_context = f"[HUMAN INTERVENTION OVERRIDE LOG]: {state.last_intervention_notes}"
         state.last_intervention_notes = None  
         return {
-            "status": "resumed_context",
+            "status": ResponseStatus.RESUMED_CONTEXT.value,
             "message": injected_context,
             "instructions": "Human operator handoff caught. Adapt steps using log data."
         }
 
-    # PRIVACY TRIGGER
+    # PRIVACY TRIGGER CHECK
     sensitive_keywords = [
         "credential", "password", "payment", "checkout", "bank", "dashboard", 
         "scrape", "scraping", "login", "signin", "signup", "creditcard", "cvv", 
-        "card_number", "personal", "account", "checkout", "stripe", "paypal"
+        "card_number", "personal", "account", "stripe", "paypal"
     ]
     
     trigger_fired = False
@@ -198,28 +222,32 @@ async def execute_to_extension(command: AgentActionPayload):
         state.human_in_control = True
         if state.extension_ws:
             await state.extension_ws.send_text(json.dumps({
-                "type": "state_sync",
+                "type": WSMessageType.STATE_SYNC.value,
                 "human_in_control": True,
                 "notes": f"Security Abort: {reason}"
             }))
         print(f"[SECURITY ABORT] Outbound requests locked. {reason}")
         return {
-            "status": "security_abort",
+            "status": ResponseStatus.SECURITY_ABORT.value,
             "message": f"Sensitive scope detected. Outbound requests locked. Human intervention required. Reason: {reason}"
         }
 
     if not state.extension_ws:
-        return {"status": "error", "message": "Extension is offline."}
+        return {
+            "status": ResponseStatus.ERROR.value, 
+            "message": "Extension is offline.",
+            "error": {"code": ErrorCode.EXTENSION_OFFLINE.value, "message": "Chrome extension is not connected to WebSocket gateway."}
+        }
 
     cmd_id = command.id
     loop = asyncio.get_running_loop()
     state.pending_responses[cmd_id] = loop.create_future()
 
-    # Enforce AgentActionPayload schema inside WS frame
+    # Enforce schema inside WS frame
     await state.extension_ws.send_text(json.dumps({
-        "type": "execute_action",
+        "type": WSMessageType.EXECUTE_ACTION.value,
         "id": command.id,
-        "action_type": command.action_type,
+        "action_type": command.action_type.value if hasattr(command.action_type, "value") else str(command.action_type),
         "target_data": command.target_data,
         "requires_privacy_check": command.requires_privacy_check,
         "session_title": command.session_title,
@@ -228,11 +256,16 @@ async def execute_to_extension(command: AgentActionPayload):
 
     try:
         result = await asyncio.wait_for(state.pending_responses[cmd_id], timeout=30.0)
-        return {"status": "success", "result": result}
+        return {"status": ResponseStatus.SUCCESS.value, "result": result}
     except asyncio.TimeoutError:
-        return {"status": "error", "message": "Execution engine frame timed out."}
+        return {
+            "status": ResponseStatus.ERROR.value, 
+            "message": "Execution engine frame timed out.",
+            "error": {"code": ErrorCode.EXECUTION_TIMEOUT.value, "message": "Command execution exceeded 30.0s limit."}
+        }
     finally:
         state.pending_responses.pop(cmd_id, None)
+
 
 @app.post("/human_release")
 async def human_release(payload: ReleasePayload):
@@ -244,34 +277,38 @@ async def human_release(payload: ReleasePayload):
     if state.extension_ws:
         try:
             await state.extension_ws.send_text(json.dumps({
-                "type": "state_sync",
+                "type": WSMessageType.STATE_SYNC.value,
                 "human_in_control": False,
                 "notes": state.last_intervention_notes
             }))
         except Exception as e:
             print(f"[Bridge] Error sending state_sync on release: {e}")
             
-    return {"status": "success", "human_in_control": False}
+    return {"status": ResponseStatus.SUCCESS.value, "human_in_control": False}
+
 
 @app.post("/stop")
 async def stop_active_task():
     state.record_activity()
     state.human_in_control = False
     state.last_intervention_notes = None
+    
     # Cancel all pending future responses
     for cmd_id, future in list(state.pending_responses.items()):
         if not future.done():
             future.set_result({"status": "aborted", "message": "Task terminated by human operator."})
+    state.pending_responses.clear()
+    
     print("[Bridge] Task aborted by user takeover stop command.")
     
     if state.extension_ws:
         try:
             await state.extension_ws.send_text(json.dumps({
-                "type": "state_sync",
+                "type": WSMessageType.STATE_SYNC.value,
                 "human_in_control": False,
                 "notes": "Task terminated."
             }))
         except Exception as e:
             print(f"[Bridge] Error sending state_sync on stop: {e}")
 
-    return {"status": "success"}
+    return {"status": ResponseStatus.SUCCESS.value}
