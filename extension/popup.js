@@ -51,21 +51,21 @@ document.addEventListener("DOMContentLoaded", () => {
     function updateUI(humanInControl) {
         isHumanMode = humanInControl;
         if (humanInControl) {
-            statusTag.innerText = "MANUAL ACTIVE";
+            statusTag.innerText = "Manual Active";
             statusTag.className = "status-tag status-manual";
-            controlText.innerText = "Human Active";
-            controlText.style.color = "#EA4335";
-            controlText.style.textShadow = "0 0 8px rgba(234, 67, 53, 0.2)";
+            controlText.innerText = "Operator Active";
+            controlText.style.color = "#ff7369";
+            controlText.style.textShadow = "none";
             
             actionBtn.innerText = "Return Control to Agent";
             actionBtn.className = "btn btn-resume";
             contextBox.classList.add("active");
         } else {
-            statusTag.innerText = "AUTO ENGINE";
+            statusTag.innerText = "Auto Engine";
             statusTag.className = "status-tag status-auto";
             controlText.innerText = "Agent Active";
-            controlText.style.color = "#34A853";
-            controlText.style.textShadow = "0 0 8px rgba(52, 168, 83, 0.2)";
+            controlText.style.color = "#4dab9a";
+            controlText.style.textShadow = "none";
             
             actionBtn.innerText = "Take Over Control";
             actionBtn.className = "btn btn-takeover";
@@ -126,14 +126,14 @@ document.addEventListener("DOMContentLoaded", () => {
                   </div>
                 </div>
                 <div class="agent-actions">
-                  <select class="color-select" data-id="${server.id}">
-                    <option value="purple">💜 Purple</option>
-                    <option value="blue">💙 Blue</option>
-                    <option value="green">💚 Green</option>
-                    <option value="orange">🧡 Orange</option>
-                    <option value="red">❤️ Red</option>
+                  <select class="color-select" data-id="${server.id}" title="Theme Accent">
+                    <option value="purple">Purple</option>
+                    <option value="blue">Blue</option>
+                    <option value="green">Green</option>
+                    <option value="orange">Orange</option>
+                    <option value="red">Red</option>
                   </select>
-                  <button class="btn-edit" data-id="${server.id}">⚙️</button>
+                  <button class="btn-edit" data-id="${server.id}" title="Configure Server">⚙️</button>
                   <label class="switch">
                     <input type="checkbox" data-id="${server.id}" ${server.enabled ? 'checked' : ''} />
                     <span class="slider"></span>
