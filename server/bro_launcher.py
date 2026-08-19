@@ -1,6 +1,6 @@
 """
 Agent Bro Hands - Smart Launcher & Subsystem Manager
-Handles on-demand gateway boot, extension health checks, and Chrome auto-launch.
+Handles on-demand gateway boot, extension health checks, process lifecycle, and Chrome auto-launch.
 """
 
 import argparse
@@ -8,11 +8,19 @@ import json
 import os
 import platform
 import shutil
+import signal
 import subprocess
 import sys
 import time
 import uuid
+from typing import Optional
 import requests
+
+from server.models import (
+    ActionType,
+    ResponseStatus,
+    ErrorCode
+)
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EXTENSION_DIR = os.path.join(REPO_ROOT, "extension")
@@ -20,7 +28,45 @@ PID_FILE_PATH = os.path.join(REPO_ROOT, ".bro_pid")
 DEFAULT_SERVER_URL = "http://127.0.0.1:8000"
 
 
-def find_chrome_path() -> str | None:
+def is_pid_running(pid: int) -> bool:
+    """Checks if a given process ID is actively executing on the OS."""
+    if pid <= 0:
+        return False
+    if platform.system() == "Windows":
+        try:
+            # Query tasklist with CSV output
+            out = subprocess.check_output(
+                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                creationflags=0x08000000 if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+                text=True
+            )
+            return str(pid) in out
+        except Exception:
+            return False
+    else:
+        try:
+            os.kill(pid, 0)
+            return True
+        except (OSError, ProcessLookupError):
+            return False
+
+
+def clean_stale_pid_file():
+    """Removes PID file if the corresponding process is not running."""
+    if os.path.exists(PID_FILE_PATH):
+        try:
+            with open(PID_FILE_PATH, "r", encoding="utf-8") as f:
+                pid = int(f.read().strip())
+            if not is_pid_running(pid):
+                os.remove(PID_FILE_PATH)
+        except Exception:
+            try:
+                os.remove(PID_FILE_PATH)
+            except Exception:
+                pass
+
+
+def find_chrome_path() -> Optional[str]:
     """Detects the Google Chrome or Chromium executable across Windows, macOS, and Linux."""
     system = platform.system()
 
@@ -82,6 +128,7 @@ def is_server_running(server_url: str = DEFAULT_SERVER_URL) -> bool:
 
 def get_gateway_status(server_url: str = DEFAULT_SERVER_URL) -> dict:
     """Fetches the current status payload from the gateway server."""
+    clean_stale_pid_file()
     try:
         resp = requests.get(f"{server_url}/status", timeout=2.0)
         if resp.status_code == 200:
@@ -93,6 +140,7 @@ def get_gateway_status(server_url: str = DEFAULT_SERVER_URL) -> dict:
 
 def ensure_server_running(port: int = 8000, timeout: float = 8.0) -> bool:
     """Ensures the FastAPI gateway server is running, booting it in the background if needed."""
+    clean_stale_pid_file()
     server_url = f"http://127.0.0.1:{port}"
     if is_server_running(server_url):
         return True
@@ -184,7 +232,11 @@ def ensure_ready(server_url: str = DEFAULT_SERVER_URL, auto_launch_chrome: bool 
     """
     if not is_server_running(server_url):
         if not ensure_server_running():
-            return {"status": "error", "message": "Failed to start FastAPI gateway server."}
+            return {
+                "status": ResponseStatus.ERROR.value,
+                "message": "Failed to start FastAPI gateway server.",
+                "error": {"code": ErrorCode.INTERNAL_ERROR.value, "message": "Server process did not become healthy."}
+            }
 
     status = get_gateway_status(server_url)
     if not status.get("extension_connected") and auto_launch_chrome:
@@ -199,8 +251,8 @@ def execute_action(
     action_type: str,
     target_data: str,
     requires_privacy_check: bool = False,
-    session_title: str | None = "Agent Automation",
-    group_color: str | None = "purple",
+    session_title: Optional[str] = "Agent Automation",
+    group_color: Optional[str] = "purple",
     server_url: str = DEFAULT_SERVER_URL,
 ) -> dict:
     """Ensures environment is ready and sends action payload to /execute."""
@@ -217,7 +269,11 @@ def execute_action(
         resp = requests.post(f"{server_url}/execute", json=payload, timeout=35.0)
         return resp.json()
     except Exception as e:
-        return {"status": "error", "message": f"Execution request failed: {e}"}
+        return {
+            "status": ResponseStatus.ERROR.value,
+            "message": f"Execution request failed: {e}",
+            "error": {"code": ErrorCode.INTERNAL_ERROR.value, "message": str(e)}
+        }
 
 
 def release_takeover(notes: str = "", server_url: str = DEFAULT_SERVER_URL) -> dict:
@@ -227,7 +283,11 @@ def release_takeover(notes: str = "", server_url: str = DEFAULT_SERVER_URL) -> d
         resp = requests.post(f"{server_url}/human_release", json={"notes": notes}, timeout=5.0)
         return resp.json()
     except Exception as e:
-        return {"status": "error", "message": f"Human release request failed: {e}"}
+        return {
+            "status": ResponseStatus.ERROR.value,
+            "message": f"Human release request failed: {e}",
+            "error": {"code": ErrorCode.INTERNAL_ERROR.value, "message": str(e)}
+        }
 
 
 def stop_tasks(server_url: str = DEFAULT_SERVER_URL) -> dict:
@@ -237,7 +297,11 @@ def stop_tasks(server_url: str = DEFAULT_SERVER_URL) -> dict:
         resp = requests.post(f"{server_url}/stop", timeout=5.0)
         return resp.json()
     except Exception as e:
-        return {"status": "error", "message": f"Stop request failed: {e}"}
+        return {
+            "status": ResponseStatus.ERROR.value,
+            "message": f"Stop request failed: {e}",
+            "error": {"code": ErrorCode.INTERNAL_ERROR.value, "message": str(e)}
+        }
 
 
 def kill_server() -> bool:
@@ -261,7 +325,10 @@ def kill_server() -> bool:
             print(f"[Launcher] Error killing PID {pid}: {e}")
 
     if os.path.exists(PID_FILE_PATH):
-        os.remove(PID_FILE_PATH)
+        try:
+            os.remove(PID_FILE_PATH)
+        except Exception:
+            pass
     return True
 
 
@@ -299,32 +366,36 @@ def main():
 
     args = parser.parse_args()
 
-    if not args.command or args.command == "status":
-        status = get_gateway_status()
-        print(json.dumps(status, indent=2))
+    try:
+        if not args.command or args.command == "status":
+            status = get_gateway_status()
+            print(json.dumps(status, indent=2))
 
-    elif args.command == "start":
-        status = ensure_ready()
-        print(json.dumps(status, indent=2))
+        elif args.command == "start":
+            status = ensure_ready()
+            print(json.dumps(status, indent=2))
 
-    elif args.command == "navigate":
-        res = execute_action("navigate", args.url, requires_privacy_check=args.privacy, session_title=args.title)
-        print(json.dumps(res, indent=2))
+        elif args.command == "navigate":
+            res = execute_action("navigate", args.url, requires_privacy_check=args.privacy, session_title=args.title)
+            print(json.dumps(res, indent=2))
 
-    elif args.command == "eval":
-        res = execute_action("execute_js", args.code, requires_privacy_check=args.privacy, session_title=args.title)
-        print(json.dumps(res, indent=2))
+        elif args.command == "eval":
+            res = execute_action("execute_js", args.code, requires_privacy_check=args.privacy, session_title=args.title)
+            print(json.dumps(res, indent=2))
 
-    elif args.command == "release":
-        res = release_takeover(args.notes)
-        print(json.dumps(res, indent=2))
+        elif args.command == "release":
+            res = release_takeover(args.notes)
+            print(json.dumps(res, indent=2))
 
-    elif args.command == "stop":
-        res = stop_tasks()
-        print(json.dumps(res, indent=2))
+        elif args.command == "stop":
+            res = stop_tasks()
+            print(json.dumps(res, indent=2))
 
-    elif args.command == "kill":
-        kill_server()
+        elif args.command == "kill":
+            kill_server()
+    except KeyboardInterrupt:
+        print("\n[Launcher] Command cancelled by user.")
+        sys.exit(0)
 
 
 if __name__ == "__main__":

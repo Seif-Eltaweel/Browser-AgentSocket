@@ -1,5 +1,14 @@
-// content.js - Agent Bro Hands On-Page HUD & Execution Interactivity
-console.log('[Agent Bro Hands] Content script active.');
+// content.js - Agent Bro Hands On-Page HUD & Execution Interactivity (Shadow DOM Isolated)
+console.log('[Agent Bro Hands] Content script active (Shadow DOM Encapsulated).');
+
+const MT = (typeof MessageTypes !== "undefined") ? MessageTypes : (window.BroProtocol ? window.BroProtocol.MessageTypes : {
+    SHOW_GLOW: "show_glow",
+    SHOW_TAKEOVER: "show_takeover",
+    HIDE_GLOW: "hide_glow",
+    PAGE_TAKEOVER: "page_takeover",
+    PAGE_STOP: "page_stop",
+    PAGE_RESUME: "page_resume"
+});
 
 let currentSessionTitle = "Agent Bro Task";
 let currentGroupColor = "purple";
@@ -10,12 +19,16 @@ let tooltipTimeout = null;
 // ============================================================================
 // KEYBOARD GUARD (INTERACTION SHIELD)
 // Blocks accidental typing on the host page during autonomous execution
+// Inspects composedPath() to allow typing inside Shadow DOM inputs/textareas
 // ============================================================================
 function keyboardGuard(e) {
     if (!isShieldActive) return;
-    const hudContainer = document.getElementById("agent-bro-hands-hud-container");
-    if (hudContainer && hudContainer.contains(e.target)) {
-        return; // Allow typing inside HUD input elements / textareas
+    const host = document.getElementById("agent-bro-hud-host");
+    if (host && host.shadowRoot) {
+        const path = e.composedPath ? e.composedPath() : [];
+        if (path.some(el => el === host || (host.shadowRoot && host.shadowRoot.contains(el)))) {
+            return; // Allow typing inside Shadow DOM HUD
+        }
     }
     e.stopPropagation();
     e.preventDefault();
@@ -29,18 +42,18 @@ window.addEventListener("keypress", keyboardGuard, true);
 // MESSAGE LISTENER
 // ============================================================================
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.type === "show_glow") {
+    if (message.type === (MT.SHOW_GLOW || "show_glow")) {
         currentSessionTitle = message.session_title || "Agent Bro Task";
         currentGroupColor = message.group_color || "purple";
         if (!isTakeoverActive) {
             renderActiveGlow(currentSessionTitle, currentGroupColor);
         }
         sendResponse({ status: "success" });
-    } else if (message.type === "show_takeover") {
+    } else if (message.type === (MT.SHOW_TAKEOVER || "show_takeover")) {
         currentSessionTitle = message.session_title || currentSessionTitle;
         renderTakeoverUI(currentSessionTitle);
         sendResponse({ status: "success" });
-    } else if (message.type === "hide_glow") {
+    } else if (message.type === (MT.HIDE_GLOW || "hide_glow")) {
         removeAllUI();
         sendResponse({ status: "success" });
     }
@@ -87,14 +100,45 @@ function getThemeColors(colorName) {
 }
 
 // ============================================================================
-// UI CONTAINER & TEARDOWN
+// SHADOW DOM ROOT CONTAINER & TEARDOWN
 // ============================================================================
-function getOrCreateRootContainer() {
-    let root = document.getElementById("agent-bro-hands-hud-container");
-    if (!root) {
-        root = document.createElement("div");
-        root.id = "agent-bro-hands-hud-container";
-        root.style.cssText = `
+function getOrCreateShadowRoot() {
+    let host = document.getElementById("agent-bro-hud-host");
+    if (!host) {
+        host = document.createElement("agent-bro-hud-host");
+        host.id = "agent-bro-hud-host";
+        host.style.cssText = `
+            all: initial !important;
+            position: fixed !important;
+            top: 0 !important;
+            left: 0 !important;
+            right: 0 !important;
+            bottom: 0 !important;
+            width: 100vw !important;
+            height: 100vh !important;
+            pointer-events: none !important;
+            z-index: 2147483647 !important;
+            display: block !important;
+        `;
+        const targetParent = document.documentElement || document.body;
+        targetParent.appendChild(host);
+    }
+
+    let shadow = host.shadowRoot;
+    if (!shadow) {
+        shadow = host.attachShadow({ mode: "open" });
+        injectShadowStyles(shadow);
+    }
+    return shadow;
+}
+
+function injectShadowStyles(shadowRoot) {
+    if (shadowRoot.querySelector("#agent-bro-hud-styles")) return;
+    const style = document.createElement("style");
+    style.id = "agent-bro-hud-styles";
+    style.textContent = `
+        :host {
+            all: initial !important;
             position: fixed !important;
             top: 0 !important;
             left: 0 !important;
@@ -109,29 +153,11 @@ function getOrCreateRootContainer() {
             line-height: 1.4 !important;
             box-sizing: border-box !important;
             -webkit-font-smoothing: antialiased !important;
-        `;
-        const host = document.body || document.documentElement;
-        host.appendChild(root);
-        injectGlobalStyles();
-    }
-    return root;
-}
-
-function removeAllUI() {
-    isShieldActive = false;
-    isTakeoverActive = false;
-    clearTimeout(tooltipTimeout);
-    const root = document.getElementById("agent-bro-hands-hud-container");
-    if (root && root.parentNode) {
-        root.parentNode.removeChild(root);
-    }
-}
-
-function injectGlobalStyles() {
-    if (document.getElementById("agent-bro-hud-styles")) return;
-    const style = document.createElement("style");
-    style.id = "agent-bro-hud-styles";
-    style.textContent = `
+        }
+        * {
+            box-sizing: border-box !important;
+            font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif !important;
+        }
         @keyframes agentBroFadeInUp {
             from { opacity: 0; transform: translate(-50%, 8px); }
             to { opacity: 1; transform: translate(-50%, 0); }
@@ -158,15 +184,34 @@ function injectGlobalStyles() {
             box-sizing: border-box !important;
         }
     `;
-    document.head.appendChild(style);
+    shadowRoot.appendChild(style);
+}
+
+function clearShadowRootViews(shadowRoot) {
+    const children = Array.from(shadowRoot.children);
+    for (const child of children) {
+        if (child.id !== "agent-bro-hud-styles") {
+            child.remove();
+        }
+    }
+}
+
+function removeAllUI() {
+    isShieldActive = false;
+    isTakeoverActive = false;
+    clearTimeout(tooltipTimeout);
+    const host = document.getElementById("agent-bro-hud-host");
+    if (host && host.parentNode) {
+        host.parentNode.removeChild(host);
+    }
 }
 
 // ============================================================================
 // 1. ACTIVE RUNNING STATE: Viewport Frame & Floating HUD Pill & Shield
 // ============================================================================
 function renderActiveGlow(sessionTitle, groupColor) {
-    const root = getOrCreateRootContainer();
-    root.innerHTML = ""; // Clear existing child views
+    const shadow = getOrCreateShadowRoot();
+    clearShadowRootViews(shadow);
     isShieldActive = true;
     isTakeoverActive = false;
 
@@ -187,7 +232,7 @@ function renderActiveGlow(sessionTitle, groupColor) {
         box-sizing: border-box !important;
         z-index: 2147483645 !important;
     `;
-    root.appendChild(glowFrame);
+    shadow.appendChild(glowFrame);
 
     // B. Interaction Shield Overlay
     const shield = document.createElement("div");
@@ -215,7 +260,7 @@ function renderActiveGlow(sessionTitle, groupColor) {
     shield.addEventListener("contextmenu", (e) => { e.stopPropagation(); e.preventDefault(); });
     shield.addEventListener("dblclick", (e) => { e.stopPropagation(); e.preventDefault(); });
 
-    root.appendChild(shield);
+    shadow.appendChild(shield);
 
     // C. Bottom Floating HUD Pill
     const pill = document.createElement("div");
@@ -280,7 +325,7 @@ function renderActiveGlow(sessionTitle, groupColor) {
     takeoverBtn.onclick = () => {
         renderTakeoverUI(sessionTitle);
         chrome.runtime.sendMessage({
-            type: "page_takeover",
+            type: MT.PAGE_TAKEOVER || "page_takeover",
             notes: `Operator initiated manual takeover on ${window.location.hostname}`
         });
     };
@@ -297,7 +342,7 @@ function renderActiveGlow(sessionTitle, groupColor) {
     stopBtn.onmouseenter = () => { stopBtn.style.background = "#303030"; stopBtn.style.color = "#e3e2de"; };
     stopBtn.onmouseleave = () => { stopBtn.style.background = "#282828"; stopBtn.style.color = "#9b9b9b"; };
     stopBtn.onclick = () => {
-        chrome.runtime.sendMessage({ type: "page_stop" });
+        chrome.runtime.sendMessage({ type: MT.PAGE_STOP || "page_stop" });
         removeAllUI();
     };
 
@@ -308,19 +353,19 @@ function renderActiveGlow(sessionTitle, groupColor) {
     pill.appendChild(label);
     pill.appendChild(btnGroup);
 
-    root.appendChild(pill);
+    shadow.appendChild(pill);
 }
 
 // ============================================================================
 // INTERVENTION HINT TOOLTIP
 // ============================================================================
 function showInterventionTooltip(x, y) {
-    const root = getOrCreateRootContainer();
-    let tooltip = document.getElementById("ab-shield-tooltip");
+    const shadow = getOrCreateShadowRoot();
+    let tooltip = shadow.getElementById ? shadow.getElementById("ab-shield-tooltip") : shadow.querySelector("#ab-shield-tooltip");
     if (!tooltip) {
         tooltip = document.createElement("div");
         tooltip.id = "ab-shield-tooltip";
-        root.appendChild(tooltip);
+        shadow.appendChild(tooltip);
     }
 
     const safeTop = Math.min(Math.max(y - 45, 16), window.innerHeight - 70);
@@ -356,8 +401,8 @@ function showInterventionTooltip(x, y) {
 // 2. TAKEOVER / LOCKOUT STATE: Operator in Control (Shield Removed)
 // ============================================================================
 function renderTakeoverUI(sessionTitle) {
-    const root = getOrCreateRootContainer();
-    root.innerHTML = "";
+    const shadow = getOrCreateShadowRoot();
+    clearShadowRootViews(shadow);
     isShieldActive = false; // Disable keyboard and click shielding
     isTakeoverActive = true;
 
@@ -373,7 +418,7 @@ function renderTakeoverUI(sessionTitle) {
         border: 2px dashed rgba(235, 87, 87, 0.5) !important;
         box-sizing: border-box !important;
     `;
-    root.appendChild(lockFrame);
+    shadow.appendChild(lockFrame);
 
     const pill = document.createElement("div");
     pill.id = "ab-takeover-pill";
@@ -431,7 +476,7 @@ function renderTakeoverUI(sessionTitle) {
     stopBtn.onmouseenter = () => { stopBtn.style.background = "#303030"; stopBtn.style.color = "#e3e2de"; };
     stopBtn.onmouseleave = () => { stopBtn.style.background = "#282828"; stopBtn.style.color = "#9b9b9b"; };
     stopBtn.onclick = () => {
-        chrome.runtime.sendMessage({ type: "page_stop" });
+        chrome.runtime.sendMessage({ type: MT.PAGE_STOP || "page_stop" });
         removeAllUI();
     };
 
@@ -456,17 +501,17 @@ function renderTakeoverUI(sessionTitle) {
     pill.appendChild(label);
     pill.appendChild(btnGroup);
 
-    root.appendChild(pill);
+    shadow.appendChild(pill);
 }
 
 // ============================================================================
 // 3. HANDOFF NOTES MODAL
 // ============================================================================
 function renderNotesModal(sessionTitle) {
-    const root = getOrCreateRootContainer();
+    const shadow = getOrCreateShadowRoot();
 
     // Remove any existing modal
-    const existingModal = document.getElementById("ab-notes-overlay");
+    const existingModal = shadow.querySelector ? shadow.querySelector("#ab-notes-overlay") : null;
     if (existingModal) existingModal.remove();
 
     const overlay = document.createElement("div");
@@ -578,7 +623,7 @@ function renderNotesModal(sessionTitle) {
     sendBtn.onclick = () => {
         const text = textarea.value.trim();
         chrome.runtime.sendMessage({
-            type: "page_resume",
+            type: MT.PAGE_RESUME || "page_resume",
             notes: text || "Control released by operator."
         });
         removeAllUI();
@@ -593,7 +638,7 @@ function renderNotesModal(sessionTitle) {
     modal.appendChild(actionContainer);
 
     overlay.appendChild(modal);
-    root.appendChild(overlay);
+    shadow.appendChild(overlay);
 
     setTimeout(() => textarea.focus(), 50);
 }
@@ -607,4 +652,3 @@ function escapeHtml(str) {
         .replace(/"/g, "&quot;")
         .replace(/'/g, "&#039;");
 }
-

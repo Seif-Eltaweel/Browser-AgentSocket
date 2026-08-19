@@ -1,4 +1,10 @@
-// background.js
+// background.js - Agent Bro Hands Background Hub & Execution Manager
+try {
+    importScripts("protocol.js");
+} catch (e) {
+    console.warn("protocol.js loaded via fallback scope or already available:", e);
+}
+
 const DEFAULT_SERVERS = [
     { id: "hermes", name: "Hermes Local", url: "ws://127.0.0.1:8000/ws/extension", enabled: true, color: "purple" },
     { id: "antigravity", name: "Antigravity Local", url: "ws://127.0.0.1:9000/ws/extension", enabled: false, color: "blue" },
@@ -6,12 +12,160 @@ const DEFAULT_SERVERS = [
     { id: "vps", name: "Hostinger VPS", url: "wss://yourvps.com/ws/extension", enabled: false, color: "red" }
 ];
 
-let sockets = {}; // key: serverId, value: WebSocket
+const MT = (typeof MessageTypes !== "undefined") ? MessageTypes : {
+    EXECUTE_ACTION: "execute_action",
+    COMMAND_RESPONSE: "command_response",
+    STATE_CHANGE: "state_change",
+    STATE_SYNC: "state_sync",
+    STATE_CHANGED: "state_changed",
+    PAGE_TAKEOVER: "page_takeover",
+    PAGE_RESUME: "page_resume",
+    PAGE_STOP: "page_stop",
+    SHOW_GLOW: "show_glow",
+    SHOW_TAKEOVER: "show_takeover",
+    HIDE_GLOW: "hide_glow",
+    GET_STATE: "get_state",
+    TOGGLE_MODE: "toggle_mode",
+    AUTH_STATUS_CHANGED: "auth_status_changed",
+    RELOAD_CONNECTIONS: "reload_connections",
+    GET_CONNECTION_STATUSES: "get_connection_statuses",
+    SCAN_LOCAL_AGENTS: "scan_local_agents",
+    PING: "ping"
+};
+
+const AT = (typeof ActionTypes !== "undefined") ? ActionTypes : {
+    NAVIGATE: "navigate",
+    EXECUTE_JS: "execute_js",
+    TASK_COMPLETE: "task_complete"
+};
+
+let activeSockets = {}; // key: serverId, value: ResilientSocket
 let humanInControl = false;
 let agentAuthorized = false;
 let pendingAuthResolve = null;
 
-// Initialize connections on load
+// Active tasks session tracking: sessionTitle -> { groupColor, tabId, groupId, active }
+const activeSessions = new Map();
+
+// Active evaluations tracking: tabId -> Set of reject callbacks
+const activeEvaluations = new Map();
+
+// ============================================================================
+// RESILIENT WEBSOCKET CONNECTION MANAGER
+// ============================================================================
+class ResilientSocket {
+    constructor(server, onAction, onStateSync) {
+        this.server = server;
+        this.onAction = onAction;
+        this.onStateSync = onStateSync;
+        this.ws = null;
+        this.retryCount = 0;
+        this.maxDelay = 30000;
+        this.isDisposed = false;
+        this.reconnectTimer = null;
+        this.connect();
+    }
+
+    connect() {
+        if (this.isDisposed) return;
+        console.log(`[Hub] Connecting to ${this.server.name} at ${this.server.url}...`);
+        
+        try {
+            this.ws = new WebSocket(this.server.url);
+        } catch (err) {
+            console.warn(`[Hub] WebSocket init error for ${this.server.name}:`, err);
+            this.scheduleReconnect();
+            return;
+        }
+
+        this.ws.onopen = () => {
+            console.log(`[Hub] Successfully connected to ${this.server.name}`);
+            this.retryCount = 0;
+            if (this.isOpen()) {
+                this.send({
+                    type: MT.STATE_CHANGE,
+                    human_in_control: humanInControl,
+                    notes: ""
+                });
+            }
+        };
+
+        this.ws.onmessage = async (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                if (data.type === MT.EXECUTE_ACTION) {
+                    await this.onAction(this.server, data, this);
+                } else if (data.type === MT.STATE_SYNC) {
+                    this.onStateSync(this.server, data);
+                }
+            } catch (err) {
+                console.error(`[Hub] Error processing message from ${this.server.name}:`, err);
+            }
+        };
+
+        this.ws.onclose = () => {
+            if (!this.isDisposed) {
+                this.scheduleReconnect();
+            }
+        };
+
+        this.ws.onerror = () => {
+            // Suppress noisy console logs on closed / offline optional servers
+        };
+    }
+
+    scheduleReconnect() {
+        if (this.isDisposed || this.reconnectTimer) return;
+        const delay = Math.min(1000 * Math.pow(1.5, this.retryCount), this.maxDelay) + (Math.random() * 500);
+        this.retryCount++;
+        
+        this.reconnectTimer = setTimeout(() => {
+            this.reconnectTimer = null;
+            chrome.storage.local.get(["agent_servers"], (data) => {
+                const servers = data.agent_servers || [];
+                const active = servers.find(s => s.id === this.server.id);
+                if (active && active.enabled && !this.isDisposed) {
+                    this.server = active;
+                    this.connect();
+                }
+            });
+        }, delay);
+    }
+
+    send(payload) {
+        if (this.isOpen()) {
+            this.ws.send(typeof payload === "string" ? payload : JSON.stringify(payload));
+            return true;
+        }
+        return false;
+    }
+
+    ping() {
+        return this.send({ type: MT.PING || "ping" });
+    }
+
+    isOpen() {
+        return !!(this.ws && this.ws.readyState === WebSocket.OPEN);
+    }
+
+    close() {
+        this.isDisposed = true;
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
+        if (this.ws) {
+            try {
+                this.ws.close();
+            } catch (e) {}
+            this.ws = null;
+        }
+    }
+}
+
+// ============================================================================
+// INITIALIZATION & LIFECYCLE KEEP-ALIVE ALARMS
+// ============================================================================
 chrome.storage.local.get(["human_in_control", "agent_authorized", "agent_servers"], (data) => {
     humanInControl = !!data.human_in_control;
     agentAuthorized = !!data.agent_authorized;
@@ -25,150 +179,117 @@ chrome.storage.local.get(["human_in_control", "agent_authorized", "agent_servers
     }
 });
 
+// Setup 24-second keepalive alarm
+chrome.alarms.create("bro_keepalive", { periodInMinutes: 0.4 });
+chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === "bro_keepalive") {
+        for (const id in activeSockets) {
+            activeSockets[id].ping();
+        }
+        syncConnections();
+    }
+});
+
 // Manage connections to enabled agent servers
 function syncConnections() {
     chrome.storage.local.get(["agent_servers"], (data) => {
         const servers = data.agent_servers || DEFAULT_SERVERS;
         
+        // Connect new or existing enabled servers
         servers.forEach(server => {
             if (server.enabled) {
-                const ws = sockets[server.id];
-                if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
-                    connectToServer(server);
+                const existing = activeSockets[server.id];
+                if (!existing || existing.isDisposed) {
+                    activeSockets[server.id] = new ResilientSocket(
+                        server,
+                        handleIncomingAction,
+                        handleIncomingStateSync
+                    );
+                } else if (existing && !existing.isOpen() && !existing.reconnectTimer) {
+                    existing.connect();
                 }
             } else {
-                const ws = sockets[server.id];
-                if (ws) {
-                    ws.close();
-                    delete sockets[server.id];
+                const existing = activeSockets[server.id];
+                if (existing) {
+                    existing.close();
+                    delete activeSockets[server.id];
                     console.log(`[Hub] Disconnected from disabled agent: ${server.name}`);
                 }
             }
         });
+
+        // Clean up servers removed entirely from configuration
+        for (const id in activeSockets) {
+            if (!servers.some(s => s.id === id)) {
+                activeSockets[id].close();
+                delete activeSockets[id];
+            }
+        }
     });
 }
 
-function connectToServer(server) {
-    console.log(`[Hub] Attempting connection to ${server.name} at ${server.url}...`);
-    
-    const ws = new WebSocket(server.url);
-    sockets[server.id] = ws;
-
-    ws.onopen = () => {
-        console.log(`[Hub] Successfully connected to ${server.name}`);
-        if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({
-                type: "state_change",
-                human_in_control: humanInControl,
-                notes: ""
-            }));
-        }
-    };
-
-    ws.onmessage = async (event) => {
-        try {
-            const data = JSON.parse(event.data);
-            
-            // Handle command execution requests
-            if (data.type === "execute_action") {
-                chrome.storage.local.get(["agent_servers"], async (store) => {
-                    const servers = store.agent_servers || DEFAULT_SERVERS;
-                    const currentServer = servers.find(s => s.id === server.id) || server;
-                    
-                    // Override with user's selected color from popup setting
-                    const finalColor = currentServer.color || data.group_color || "purple";
-                    const finalSessionTitle = data.session_title || `${currentServer.name} Task`;
-
-                    const result = await handleHermesAction({
-                        ...data,
-                        group_color: finalColor,
-                        session_title: finalSessionTitle
-                    });
-                    
-                    if (ws && ws.readyState === WebSocket.OPEN) {
-                        ws.send(JSON.stringify({
-                            type: "command_response",
-                            command_id: data.id,
-                            payload: result
-                        }));
-                    }
-                });
-            } 
-            // Handle state synchronisation updates (aborts, releases)
-            else if (data.type === "state_sync") {
-                console.log(`[Hub] State sync from ${server.name}:`, data);
-                updateLocalState(data.human_in_control, data.notes || "");
-                
-                if (data.human_in_control) {
-                    chrome.notifications.create({
-                        type: 'basic',
-                        iconUrl: chrome.runtime.getURL('icons/icon48.png'),
-                        title: `${server.name} Paused`,
-                        message: `Security Abort: ${data.notes || "Sensitive scope detected."}`,
-                        priority: 1
-                    });
-                } else {
-                    chrome.notifications.create({
-                        type: 'basic',
-                        iconUrl: chrome.runtime.getURL('icons/icon48.png'),
-                        title: `${server.name} Resumed`,
-                        message: 'Control returned to Agent.',
-                        priority: 1
-                    });
-                    hideAllGlows();
-                }
-            }
-        } catch (err) {
-            console.error(`[Hub] Error processing message from ${server.name}:`, err);
-        }
-    };
-
-    const retryDelays = { hermes: 3000, antigravity: 10000, claude: 10000, vps: 15000 };
-
-    ws.onclose = () => {
-        delete sockets[server.id];
+// Action dispatcher
+async function handleIncomingAction(server, data, socketInstance) {
+    chrome.storage.local.get(["agent_servers"], async (store) => {
+        const servers = store.agent_servers || DEFAULT_SERVERS;
+        const currentServer = servers.find(s => s.id === server.id) || server;
         
-        // Reconnect attempt if still enabled in settings
-        chrome.storage.local.get(["agent_servers"], (data) => {
-            const currentServers = data.agent_servers || [];
-            const activeServer = currentServers.find(s => s.id === server.id);
-            if (activeServer && activeServer.enabled) {
-                const delay = retryDelays[server.id] || 10000;
-                setTimeout(() => {
-                    chrome.storage.local.get(["agent_servers"], (freshData) => {
-                        const freshServers = freshData.agent_servers || [];
-                        const freshServer = freshServers.find(s => s.id === server.id);
-                        if (freshServer && freshServer.enabled) {
-                            connectToServer(freshServer);
-                        }
-                    });
-                }, delay);
-            }
-        });
-    };
+        const finalColor = currentServer.color || data.group_color || "purple";
+        const finalSessionTitle = data.session_title || `${currentServer.name} Task`;
 
-    ws.onerror = (err) => {
-        // Suppress noisy error event object logs for inactive optional servers
-    };
+        const result = await handleHermesAction({
+            ...data,
+            group_color: finalColor,
+            session_title: finalSessionTitle
+        });
+        
+        socketInstance.send({
+            type: MT.COMMAND_RESPONSE,
+            command_id: data.id,
+            payload: result
+        });
+    });
+}
+
+// State sync dispatcher
+function handleIncomingStateSync(server, data) {
+    console.log(`[Hub] State sync from ${server.name}:`, data);
+    updateLocalState(data.human_in_control, data.notes || "");
+    
+    if (data.human_in_control) {
+        chrome.notifications.create({
+            type: 'basic',
+            iconUrl: chrome.runtime.getURL('icons/icon48.png'),
+            title: `${server.name} Paused`,
+            message: `Security Abort: ${data.notes || "Sensitive scope detected."}`,
+            priority: 1
+        });
+    } else {
+        chrome.notifications.create({
+            type: 'basic',
+            iconUrl: chrome.runtime.getURL('icons/icon48.png'),
+            title: `${server.name} Resumed`,
+            message: 'Control returned to Agent.',
+            priority: 1
+        });
+        hideAllGlows();
+    }
 }
 
 function broadcastStateChange(humanInControl, notes) {
-    for (const id in sockets) {
-        const ws = sockets[id];
-        if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({
-                type: "state_change",
-                human_in_control: humanInControl,
-                notes: notes || ""
-            }));
-        }
+    for (const id in activeSockets) {
+        activeSockets[id].send({
+            type: MT.STATE_CHANGE,
+            human_in_control: humanInControl,
+            notes: notes || ""
+        });
     }
 }
 
 function updateLocalState(active, notes) {
     humanInControl = active;
     chrome.storage.local.set({ human_in_control: active, intervention_notes: notes }, () => {
-        chrome.runtime.sendMessage({ type: "state_changed", humanInControl: active }).catch(() => {});
+        chrome.runtime.sendMessage({ type: MT.STATE_CHANGED || "state_changed", humanInControl: active }).catch(() => {});
     });
 }
 
@@ -193,16 +314,16 @@ function hitServerEndpoint(endpoint, payload = {}) {
     });
 }
 
-// Listener for messages from popup.js, auth.js, and content.js
+// ============================================================================
+// RUNTIME MESSAGE DISPATCHER
+// ============================================================================
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    console.log('Received message in background script:', message);
-    
-    if (message.type === "get_state") {
+    if (message.type === (MT.GET_STATE || "get_state")) {
         sendResponse({ humanInControl: humanInControl });
         return false;
     } 
     
-    else if (message.type === "toggle_mode") {
+    else if (message.type === (MT.TOGGLE_MODE || "toggle_mode")) {
         const targetMode = !humanInControl;
         const notes = message.human_intervention_notes || "";
         
@@ -219,7 +340,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return false;
     }
 
-    else if (message.type === "auth_status_changed") {
+    else if (message.type === (MT.AUTH_STATUS_CHANGED || "auth_status_changed")) {
         agentAuthorized = !!message.authorized;
         console.log("[Auth] Authorization state changed:", agentAuthorized);
         if (agentAuthorized && pendingAuthResolve) {
@@ -229,14 +350,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return false;
     }
 
-    else if (message.type === "page_takeover") {
+    else if (message.type === (MT.PAGE_TAKEOVER || "page_takeover")) {
         console.warn("[Takeover] User requested manual takeover from page overlay.");
         updateLocalState(true, message.notes || "User clicked Take Over on page");
         broadcastStateChange(true, message.notes || "User clicked Take Over on page");
         return false;
     }
 
-    else if (message.type === "page_stop") {
+    else if (message.type === (MT.PAGE_STOP || "page_stop")) {
         console.warn("[Takeover] User clicked Stop. Terminating active tasks.");
         hitServerEndpoint("/stop");
         updateLocalState(false, "");
@@ -244,7 +365,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return false;
     }
 
-    else if (message.type === "page_resume") {
+    else if (message.type === (MT.PAGE_RESUME || "page_resume")) {
         console.log("[Takeover] User clicked Resume and continue with notes:", message.notes);
         hitServerEndpoint("/human_release", { notes: message.notes });
         updateLocalState(false, "");
@@ -252,25 +373,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return false;
     }
 
-    else if (message.type === "reload_connections") {
+    else if (message.type === (MT.RELOAD_CONNECTIONS || "reload_connections")) {
         console.log("[Hub] Reloading connections based on settings changes.");
         syncConnections();
         return false;
     }
 
-    else if (message.type === "get_connection_statuses") {
+    else if (message.type === (MT.GET_CONNECTION_STATUSES || "get_connection_statuses")) {
         const statuses = {};
-        for (const id in sockets) {
-            const ws = sockets[id];
-            if (ws) {
-                statuses[id] = ws.readyState === WebSocket.OPEN ? "online" : "offline";
-            }
+        for (const id in activeSockets) {
+            statuses[id] = activeSockets[id].isOpen() ? "online" : "offline";
         }
         sendResponse({ statuses: statuses });
         return false;
     }
 
-    else if (message.type === "scan_local_agents") {
+    else if (message.type === (MT.SCAN_LOCAL_AGENTS || "scan_local_agents")) {
         scanLocalPorts().then(count => {
             sendResponse({ discoveredCount: count });
         });
@@ -289,6 +407,9 @@ async function ensureAuthorized() {
     });
 }
 
+// ============================================================================
+// AUTOMATION & CDP EXECUTION ENGINE
+// ============================================================================
 async function handleHermesAction(command) {
     // 1. Ensure user has granted one-time authorization
     await ensureAuthorized();
@@ -297,11 +418,11 @@ async function handleHermesAction(command) {
     const groupColor = command.group_color || "purple";
 
     switch (command.action_type) {
-        case "navigate":
+        case (AT.NAVIGATE || "navigate"):
             return await handleNavigation(command.target_data, sessionTitle, groupColor);
-        case "execute_js":
+        case (AT.EXECUTE_JS || "execute_js"):
             return await handleExecuteJS(command.target_data, sessionTitle, groupColor);
-        case "task_complete":
+        case (AT.TASK_COMPLETE || "task_complete"):
             return await handleTaskComplete(sessionTitle);
         default:
             return { status: "error", message: `Unknown action capability: ${command.action_type}` };
@@ -329,9 +450,6 @@ async function handleTaskComplete(sessionTitle) {
     }
 }
 
-// Active tasks session tracking: sessionTitle -> { groupColor, tabId, groupId, active }
-const activeSessions = new Map();
-
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     if (changeInfo.status === "complete" && tab.groupId && tab.groupId !== chrome.tabGroups.TAB_GROUP_ID_NONE) {
         chrome.tabGroups.get(tab.groupId, (group) => {
@@ -339,7 +457,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
             const session = activeSessions.get(group.title);
             if (session && session.active && !humanInControl) {
                 chrome.tabs.sendMessage(tabId, {
-                    type: "show_glow",
+                    type: MT.SHOW_GLOW || "show_glow",
                     session_title: group.title,
                     group_color: session.groupColor || "purple"
                 }).catch(() => {});
@@ -348,7 +466,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     }
 });
 
-// Locate or create the dynamic tab group and execute navigation within it, reusing existing tabs in the group
+// Locate or create dynamic tab group and navigate
 async function handleNavigation(url, sessionTitle, groupColor) {
     activeSessions.set(sessionTitle, { groupColor, active: true });
     try {
@@ -370,7 +488,7 @@ async function handleNavigation(url, sessionTitle, groupColor) {
                         reused: true
                     };
                 } catch (updateErr) {
-                    console.warn(`[Hub] Failed to update tab ${targetTab.id}, falling back to creating new tab:`, updateErr);
+                    console.warn(`[Hub] Failed to update tab ${targetTab.id}, falling back to new tab:`, updateErr);
                 }
             }
 
@@ -406,7 +524,6 @@ function createAndGroupTab(url, sessionTitle, groupColor, existingGroupId) {
             if (existingGroupId !== null && existingGroupId !== undefined) {
                 chrome.tabs.group({ groupId: existingGroupId, tabIds: newTab.id }, () => {
                     if (chrome.runtime.lastError) {
-                        // Existing group might have been closed/ungrouped, fallback to fresh group
                         createFreshHermesGroup(newTab.id, sessionTitle, groupColor, resolve);
                     } else {
                         resolve({ status: "success", tabId: newTab.id, groupId: existingGroupId, reused: false });
@@ -439,7 +556,7 @@ function createFreshHermesGroup(tabId, sessionTitle, groupColor, resolve) {
     });
 }
 
-// Find the target tab ID which MUST be a member of the dynamic task group
+// Find target tab ID in secure task group
 async function getTargetTabId(sessionTitle) {
     try {
         const groups = await chrome.tabGroups.query({ title: sessionTitle });
@@ -459,9 +576,6 @@ async function getTargetTabId(sessionTitle) {
     }
     return null;
 }
-
-// Active evaluations tracking: tabId -> Set of reject callbacks
-const activeEvaluations = new Map();
 
 chrome.tabs.onRemoved.addListener((tabId) => {
     if (activeEvaluations.has(tabId)) {
@@ -495,7 +609,6 @@ function attachDebugger(target) {
 function detachDebugger(target) {
     return new Promise((resolve) => {
         chrome.debugger.detach(target, () => {
-            // Ignore errors if debugger is already detached or tab closed
             resolve();
         });
     });
@@ -525,7 +638,7 @@ async function handleExecuteJS(code, sessionTitle, groupColor) {
     if (!humanInControl) {
         try {
             await chrome.tabs.sendMessage(tabId, { 
-                type: "show_glow", 
+                type: MT.SHOW_GLOW || "show_glow", 
                 session_title: sessionTitle, 
                 group_color: groupColor 
             });
@@ -543,6 +656,10 @@ async function handleExecuteJS(code, sessionTitle, groupColor) {
             activeEvaluations.set(tabId, new Set());
         }
         activeEvaluations.get(tabId).add(reject);
+    });
+
+    const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error("[CDP Timeout]: Script evaluation exceeded 25s timeout limit.")), 25000);
     });
 
     try {
@@ -566,7 +683,7 @@ async function handleExecuteJS(code, sessionTitle, groupColor) {
             return res && res.result ? res.result.value : null;
         })();
 
-        const result = await Promise.race([evalPromise, tabClosePromise]);
+        const result = await Promise.race([evalPromise, tabClosePromise, timeoutPromise]);
         return { status: "success", output: result };
     } catch (err) {
         console.error("Script execution failed:", err);
@@ -580,7 +697,6 @@ async function handleExecuteJS(code, sessionTitle, groupColor) {
         if (attached) {
             await detachDebugger(target);
         }
-        // Retain HUD and interaction shield during task session; cleared only on task_complete or stop
     }
 }
 
@@ -590,7 +706,7 @@ async function hideAllGlows() {
         const tabs = await chrome.tabs.query({});
         for (const tab of tabs) {
             try {
-                chrome.tabs.sendMessage(tab.id, { type: "hide_glow" });
+                chrome.tabs.sendMessage(tab.id, { type: MT.HIDE_GLOW || "hide_glow" });
             } catch(e) {}
         }
     } catch(err) {
@@ -614,13 +730,13 @@ async function scanLocalPorts() {
             const connected = await new Promise((resolve) => {
                 const tempSocket = new WebSocket(url);
                 const timer = setTimeout(() => {
-                    tempSocket.close();
+                    try { tempSocket.close(); } catch(e){}
                     resolve(false);
                 }, 800);
 
                 tempSocket.onopen = () => {
                     clearTimeout(timer);
-                    tempSocket.close();
+                    try { tempSocket.close(); } catch(e){}
                     resolve(true);
                 };
                 tempSocket.onerror = () => {
@@ -658,21 +774,3 @@ async function scanLocalPorts() {
 
     return newAgentsDiscovered;
 }
-
-// ============================================================================
-// HEARTBEAT KEEP-ALIVE PROTOCOL
-// Prevents Chrome from discarding the Service Worker during automation idle phases
-// ============================================================================
-setInterval(() => {
-    let activeSocketsFound = false;
-    for (const id in sockets) {
-        const ws = sockets[id];
-        if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: "ping" }));
-            activeSocketsFound = true;
-        }
-    }
-    if (activeSocketsFound) {
-        console.log("Heartbeat ping sent to active agent servers.");
-    }
-}, 10000);
