@@ -209,7 +209,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (targetMode) {
             updateLocalState(true, notes);
             broadcastStateChange(true, notes);
-            hideAllGlows();
             sendResponse({ humanInControl: true });
         } else {
             hitServerEndpoint("/human_release", { notes: notes });
@@ -234,7 +233,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         console.warn("[Takeover] User requested manual takeover from page overlay.");
         updateLocalState(true, message.notes || "User clicked Take Over on page");
         broadcastStateChange(true, message.notes || "User clicked Take Over on page");
-        hideAllGlows();
         return false;
     }
 
@@ -339,7 +337,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
         chrome.tabGroups.get(tab.groupId, (group) => {
             if (chrome.runtime.lastError || !group) return;
             const session = activeSessions.get(group.title);
-            if (session && session.active) {
+            if (session && session.active && !humanInControl) {
                 chrome.tabs.sendMessage(tabId, {
                     type: "show_glow",
                     session_title: group.title,
@@ -524,13 +522,15 @@ async function handleExecuteJS(code, sessionTitle, groupColor) {
         };
     }
 
-    try {
-        await chrome.tabs.sendMessage(tabId, { 
-            type: "show_glow", 
-            session_title: sessionTitle, 
-            group_color: groupColor 
-        });
-    } catch (e) {}
+    if (!humanInControl) {
+        try {
+            await chrome.tabs.sendMessage(tabId, { 
+                type: "show_glow", 
+                session_title: sessionTitle, 
+                group_color: groupColor 
+            });
+        } catch (e) {}
+    }
 
     console.log(`Executing dynamic script via CDP in tab ${tabId} (inside secure group '${sessionTitle}')`);
     const target = { tabId: tabId };
