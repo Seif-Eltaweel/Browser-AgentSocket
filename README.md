@@ -210,19 +210,5 @@ The local FastAPI Gateway operates at `http://127.0.0.1:8000`:
 
 ---
 
-## 📑 Feature Specifications Index
-
-The architectural designs and feature specifications for Agent Bro Hands are documented in [`specs/`](file:///c:/Users/20106/agent_bro_hands/specs/):
-
-* [`01_tab_lifecycle_and_navigation.md`](file:///c:/Users/20106/agent_bro_hands/specs/01_tab_lifecycle_and_navigation.md) — Tab Lifecycle & Tab Group Reuse
-* [`02_concurrency_and_takeover_resilience.md`](file:///c:/Users/20106/agent_bro_hands/specs/02_concurrency_and_takeover_resilience.md) — Concurrency & Non-blocking Takeover
-* [`03_cdp_debugger_and_execution_engine.md`](file:///c:/Users/20106/agent_bro_hands/specs/03_cdp_debugger_and_execution_engine.md) — CDP Debugger & Safe JS Evaluation
-* [`04_floating_hud_and_ui_overlays.md`](file:///c:/Users/20106/agent_bro_hands/specs/04_floating_hud_and_ui_overlays.md) — Floating Glassmorphism HUD & Visual Controls
-* [`05_interaction_shield_and_input_lockout.md`](file:///c:/Users/20106/agent_bro_hands/specs/05_interaction_shield_and_input_lockout.md) — Viewport Interaction Shield & Event Guard
-* [`06_agent_driven_initiation_and_mcp.md`](file:///c:/Users/20106/agent_bro_hands/specs/06_agent_driven_initiation_and_mcp.md) — Zero-Friction MCP Initiation & Smart Launcher
-* [`07_takeover_overlay_persistence_and_sync_fix.md`](file:///c:/Users/20106/agent_bro_hands/specs/07_takeover_overlay_persistence_and_sync_fix.md) — Takeover Overlay Persistence & State Sync Fix
-
----
-
 ## 📄 License
 This project is licensed under the MIT License.
