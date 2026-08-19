@@ -1,20 +1,18 @@
 import asyncio
 import json
+import os
+import signal
+import sys
+import time
+from contextlib import asynccontextmanager
 from typing import Literal
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-app = FastAPI(title="Agent Bro Hands Server Gateway")
-
-# Enable global cross-origin rules
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Configurable idle timeout (default: 20 minutes = 1200 seconds)
+IDLE_TIMEOUT_SECONDS = float(os.environ.get("BRO_IDLE_TIMEOUT", "1200"))
+PID_FILE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".bro_pid")
 
 class AgentActionPayload(BaseModel):
     id: str
@@ -33,36 +31,99 @@ class SystemState:
         self.human_in_control: bool = False
         self.last_intervention_notes: str | None = None
         self.pending_responses: dict[str, asyncio.Future] = {}
+        self.last_activity_time: float = time.time()
+        self.watchdog_task: asyncio.Task | None = None
+
+    def record_activity(self):
+        self.last_activity_time = time.time()
 
 state = SystemState()
 
+def write_pid_file():
+    try:
+        with open(PID_FILE_PATH, "w", encoding="utf-8") as f:
+            f.write(str(os.getpid()))
+    except Exception as e:
+        print(f"[Watchdog] Warning: Unable to write PID file: {e}")
+
+def remove_pid_file():
+    try:
+        if os.path.exists(PID_FILE_PATH):
+            os.remove(PID_FILE_PATH)
+    except Exception as e:
+        print(f"[Watchdog] Warning: Unable to remove PID file: {e}")
+
+async def idle_watchdog_loop():
+    print(f"[Watchdog] Auto-idle watchdog started (timeout: {IDLE_TIMEOUT_SECONDS}s / {IDLE_TIMEOUT_SECONDS/60:.1f}m).")
+    try:
+        while True:
+            await asyncio.sleep(10)
+            idle_duration = time.time() - state.last_activity_time
+            if idle_duration >= IDLE_TIMEOUT_SECONDS:
+                print(f"\n[WATCHDOG] Idle duration {idle_duration:.1f}s exceeded limit of {IDLE_TIMEOUT_SECONDS}s.")
+                print("[WATCHDOG] Cleanly shutting down background gateway process...\n")
+                remove_pid_file()
+                # Schedule immediate process termination
+                os._exit(0)
+    except asyncio.CancelledError:
+        pass
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    write_pid_file()
+    state.record_activity()
+    state.watchdog_task = asyncio.create_task(idle_watchdog_loop())
+    yield
+    # Shutdown
+    if state.watchdog_task and not state.watchdog_task.done():
+        state.watchdog_task.cancel()
+    remove_pid_file()
+
+app = FastAPI(title="Agent Bro Hands Server Gateway", lifespan=lifespan)
+
+# Enable global cross-origin rules
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 @app.get("/")
 def read_root():
+    state.record_activity()
     return {
         "status": "Agent Bro Hands Server is Live", 
         "extension_connected": state.extension_ws is not None,
-        "human_in_control": state.human_in_control
+        "human_in_control": state.human_in_control,
+        "idle_seconds_remaining": max(0.0, IDLE_TIMEOUT_SECONDS - (time.time() - state.last_activity_time))
     }
 
 @app.get("/status")
 def get_status():
+    state.record_activity()
     return {
         "status": "Agent Bro Hands Server is Live",
         "extension_connected": state.extension_ws is not None,
         "human_in_control": state.human_in_control,
-        "last_intervention_notes": state.last_intervention_notes
+        "last_intervention_notes": state.last_intervention_notes,
+        "idle_seconds_remaining": max(0.0, IDLE_TIMEOUT_SECONDS - (time.time() - state.last_activity_time))
     }
 
 @app.websocket("/ws/extension")
 async def extension_endpoint(websocket: WebSocket):
     await websocket.accept()
     state.extension_ws = websocket
+    state.record_activity()
     print("\n[SUCCESS] ==========================================")
     print("[Bridge] Chrome Extension pipeline linked cleanly via WebSocket.")
     print("====================================================\n")
     try:
         while True:
             raw_message = await websocket.receive_text()
+            state.record_activity()
             message = json.loads(raw_message)
             msg_type = message.get("type")
             
@@ -88,9 +149,12 @@ async def extension_endpoint(websocket: WebSocket):
         print("\n[DISCONNECT] Chrome Extension detached from bridge channel.\n")
     finally:
         state.extension_ws = None
+        state.record_activity()
 
 @app.post("/execute")
 async def execute_to_extension(command: AgentActionPayload):
+    state.record_activity()
+    
     # Non-blocking check: immediately report lock if human is currently in control
     if state.human_in_control:
         return {
@@ -172,6 +236,7 @@ async def execute_to_extension(command: AgentActionPayload):
 
 @app.post("/human_release")
 async def human_release(payload: ReleasePayload):
+    state.record_activity()
     state.human_in_control = False
     state.last_intervention_notes = payload.notes if payload.notes else "Released by human operator."
     print(f"[Bridge] Human Release Endpoint -> Human In Control: {state.human_in_control}, Notes: {state.last_intervention_notes}")
@@ -190,6 +255,7 @@ async def human_release(payload: ReleasePayload):
 
 @app.post("/stop")
 async def stop_active_task():
+    state.record_activity()
     state.human_in_control = False
     state.last_intervention_notes = None
     # Cancel all pending future responses

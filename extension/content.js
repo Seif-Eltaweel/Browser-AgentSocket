@@ -4,6 +4,7 @@ console.log('[Agent Bro Hands] Content script active.');
 let currentSessionTitle = "Agent Bro Task";
 let currentGroupColor = "purple";
 let isShieldActive = false;
+let isTakeoverActive = false;
 let tooltipTimeout = null;
 
 // ============================================================================
@@ -31,7 +32,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === "show_glow") {
         currentSessionTitle = message.session_title || "Agent Bro Task";
         currentGroupColor = message.group_color || "purple";
-        renderActiveGlow(currentSessionTitle, currentGroupColor);
+        if (!isTakeoverActive) {
+            renderActiveGlow(currentSessionTitle, currentGroupColor);
+        }
+        sendResponse({ status: "success" });
+    } else if (message.type === "show_takeover") {
+        currentSessionTitle = message.session_title || currentSessionTitle;
+        renderTakeoverUI(currentSessionTitle);
         sendResponse({ status: "success" });
     } else if (message.type === "hide_glow") {
         removeAllUI();
@@ -111,6 +118,7 @@ function getOrCreateRootContainer() {
 
 function removeAllUI() {
     isShieldActive = false;
+    isTakeoverActive = false;
     clearTimeout(tooltipTimeout);
     const root = document.getElementById("agent-bro-hands-hud-container");
     if (root && root.parentNode) {
@@ -179,6 +187,7 @@ function renderActiveGlow(sessionTitle, groupColor) {
     const root = getOrCreateRootContainer();
     root.innerHTML = ""; // Clear existing child views
     isShieldActive = true;
+    isTakeoverActive = false;
 
     const theme = getThemeColors(groupColor);
     root.style.setProperty("--ab-glow-color", theme.glowColor);
@@ -374,6 +383,7 @@ function renderTakeoverUI(sessionTitle) {
     const root = getOrCreateRootContainer();
     root.innerHTML = "";
     isShieldActive = false; // Disable keyboard and click shielding
+    isTakeoverActive = true;
 
     // Subtle Amber/Red Border to signify human intervention lockout
     const lockFrame = document.createElement("div");
