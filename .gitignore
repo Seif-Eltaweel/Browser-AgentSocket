@@ -53,3 +53,12 @@ Desktop.ini
 # Antigravity Framework Specs
 specs/
 
+# AgentSocket Runtime Logs, Sessions & Artifacts (Keep private & uncommitted)
+server/logs/
+*.jsonl
+.socket_server.pid
+*.pid
+*TIMELINE*.md
+*timeline*.md
+
+

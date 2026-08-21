@@ -1,4 +1,4 @@
-// background.js - Agent Bro Hands Background Hub & Execution Manager
+// background.js - AgentSocket Background Hub & Execution Manager
 try {
     importScripts("protocol.js");
 } catch (e) {
@@ -6,10 +6,10 @@ try {
 }
 
 const DEFAULT_SERVERS = [
-    { id: "hermes", name: "Hermes Local", url: "ws://127.0.0.1:8000/ws/extension", enabled: true, color: "purple" },
+    { id: "agentsocket_local", name: "AgentSocket Local (e.g. Claude, Hermes, Antigravity)", url: "ws://127.0.0.1:8000/ws/extension", enabled: true, color: "purple" },
     { id: "antigravity", name: "Antigravity Local", url: "ws://127.0.0.1:9000/ws/extension", enabled: false, color: "blue" },
     { id: "claude", name: "Claude Code", url: "ws://127.0.0.1:8500/ws/extension", enabled: false, color: "green" },
-    { id: "vps", name: "Hostinger VPS", url: "wss://yourvps.com/ws/extension", enabled: false, color: "red" }
+    { id: "vps", name: "Custom Agent / VPS", url: "wss://yourvps.com/ws/extension", enabled: false, color: "red" }
 ];
 
 const MT = (typeof MessageTypes !== "undefined") ? MessageTypes : {
@@ -180,9 +180,9 @@ chrome.storage.local.get(["human_in_control", "agent_authorized", "agent_servers
 });
 
 // Setup 24-second keepalive alarm
-chrome.alarms.create("bro_keepalive", { periodInMinutes: 0.4 });
+chrome.alarms.create("socket_keepalive", { periodInMinutes: 0.4 });
 chrome.alarms.onAlarm.addListener((alarm) => {
-    if (alarm.name === "bro_keepalive") {
+    if (alarm.name === "socket_keepalive") {
         for (const id in activeSockets) {
             activeSockets[id].ping();
         }
@@ -237,7 +237,7 @@ async function handleIncomingAction(server, data, socketInstance) {
         const finalColor = currentServer.color || data.group_color || "purple";
         const finalSessionTitle = data.session_title || `${currentServer.name} Task`;
 
-        const result = await handleHermesAction({
+        const result = await handleSocketAction({
             ...data,
             group_color: finalColor,
             session_title: finalSessionTitle
@@ -388,6 +388,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return false;
     }
 
+    else if (message.type === "CHECK_TAB_SESSION") {
+        const senderTab = sender.tab;
+        if (!senderTab || !senderTab.groupId || senderTab.groupId === chrome.tabGroups.TAB_GROUP_ID_NONE) {
+            sendResponse({ inActiveSession: false });
+            return false;
+        }
+        chrome.tabGroups.get(senderTab.groupId, (group) => {
+            if (chrome.runtime.lastError || !group || group.title.startsWith("✅")) {
+                sendResponse({ inActiveSession: false });
+                return;
+            }
+            const session = activeSessions.get(group.title) || { groupColor: group.color || "purple", active: true };
+            if (session.active) {
+                sendResponse({
+                    inActiveSession: true,
+                    session_title: group.title,
+                    group_color: session.groupColor || group.color || "purple",
+                    human_in_control: humanInControl
+                });
+            } else {
+                sendResponse({ inActiveSession: false });
+            }
+        });
+        return true;
+    }
+
     else if (message.type === (MT.SCAN_LOCAL_AGENTS || "scan_local_agents")) {
         scanLocalPorts().then(count => {
             sendResponse({ discoveredCount: count });
@@ -410,11 +436,36 @@ async function ensureAuthorized() {
 // ============================================================================
 // AUTOMATION & CDP EXECUTION ENGINE
 // ============================================================================
-async function handleHermesAction(command) {
+async function sendGlowToTab(tabId, sessionTitle, groupColor) {
+    if (humanInControl) return;
+    try {
+        await chrome.tabs.sendMessage(tabId, {
+            type: MT.SHOW_GLOW || "show_glow",
+            session_title: sessionTitle || "AgentSocket Task",
+            group_color: groupColor || "purple"
+        });
+    } catch (e) {
+        try {
+            await chrome.scripting.executeScript({
+                target: { tabId: tabId },
+                files: ["protocol.js", "content.js"]
+            });
+            await chrome.tabs.sendMessage(tabId, {
+                type: MT.SHOW_GLOW || "show_glow",
+                session_title: sessionTitle || "AgentSocket Task",
+                group_color: groupColor || "purple"
+            });
+        } catch (scriptErr) {
+            // Ignore restricted URLs
+        }
+    }
+}
+
+async function handleSocketAction(command) {
     // 1. Ensure user has granted one-time authorization
     await ensureAuthorized();
 
-    const sessionTitle = command.session_title || "Agent Bro Task";
+    const sessionTitle = command.session_title || "AgentSocket Task";
     const groupColor = command.group_color || "purple";
 
     switch (command.action_type) {
@@ -451,16 +502,19 @@ async function handleTaskComplete(sessionTitle) {
 }
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-    if (changeInfo.status === "complete" && tab.groupId && tab.groupId !== chrome.tabGroups.TAB_GROUP_ID_NONE) {
+    if ((changeInfo.status === "loading" || changeInfo.status === "complete") && tab.groupId && tab.groupId !== chrome.tabGroups.TAB_GROUP_ID_NONE) {
         chrome.tabGroups.get(tab.groupId, (group) => {
-            if (chrome.runtime.lastError || !group) return;
-            const session = activeSessions.get(group.title);
-            if (session && session.active && !humanInControl) {
-                chrome.tabs.sendMessage(tabId, {
-                    type: MT.SHOW_GLOW || "show_glow",
-                    session_title: group.title,
-                    group_color: session.groupColor || "purple"
-                }).catch(() => {});
+            if (chrome.runtime.lastError || !group || group.title.startsWith("✅")) return;
+            const session = activeSessions.get(group.title) || { groupColor: group.color || "purple", active: true };
+            if (session.active) {
+                if (humanInControl) {
+                    chrome.tabs.sendMessage(tabId, {
+                        type: MT.SHOW_TAKEOVER || "show_takeover",
+                        session_title: group.title
+                    }).catch(() => {});
+                } else {
+                    sendGlowToTab(tabId, group.title, session.groupColor || group.color || "purple");
+                }
             }
         });
     }
@@ -481,6 +535,7 @@ async function handleNavigation(url, sessionTitle, groupColor) {
                 try {
                     const updatedTab = await chrome.tabs.update(targetTab.id, { url: url, active: true });
                     activeSessions.set(sessionTitle, { groupColor, tabId: updatedTab.id, groupId: group.id, active: true });
+                    sendGlowToTab(updatedTab.id, sessionTitle, groupColor);
                     return {
                         status: "success",
                         tabId: updatedTab.id,
@@ -496,6 +551,7 @@ async function handleNavigation(url, sessionTitle, groupColor) {
             const res = await createAndGroupTab(url, sessionTitle, groupColor, group.id);
             if (res && res.tabId) {
                 activeSessions.set(sessionTitle, { groupColor, tabId: res.tabId, groupId: res.groupId, active: true });
+                sendGlowToTab(res.tabId, sessionTitle, groupColor);
             }
             return res;
         }
@@ -504,6 +560,7 @@ async function handleNavigation(url, sessionTitle, groupColor) {
         const res = await createAndGroupTab(url, sessionTitle, groupColor, null);
         if (res && res.tabId) {
             activeSessions.set(sessionTitle, { groupColor, tabId: res.tabId, groupId: res.groupId, active: true });
+            sendGlowToTab(res.tabId, sessionTitle, groupColor);
         }
         return res;
     } catch (e) {
@@ -513,6 +570,7 @@ async function handleNavigation(url, sessionTitle, groupColor) {
 }
 
 function createAndGroupTab(url, sessionTitle, groupColor, existingGroupId) {
+
     return new Promise((resolve) => {
         chrome.tabs.create({ url: url, active: true }, (newTab) => {
             if (chrome.runtime.lastError || !newTab) {
@@ -524,19 +582,19 @@ function createAndGroupTab(url, sessionTitle, groupColor, existingGroupId) {
             if (existingGroupId !== null && existingGroupId !== undefined) {
                 chrome.tabs.group({ groupId: existingGroupId, tabIds: newTab.id }, () => {
                     if (chrome.runtime.lastError) {
-                        createFreshHermesGroup(newTab.id, sessionTitle, groupColor, resolve);
+                        createFreshSocketGroup(newTab.id, sessionTitle, groupColor, resolve);
                     } else {
                         resolve({ status: "success", tabId: newTab.id, groupId: existingGroupId, reused: false });
                     }
                 });
             } else {
-                createFreshHermesGroup(newTab.id, sessionTitle, groupColor, resolve);
+                createFreshSocketGroup(newTab.id, sessionTitle, groupColor, resolve);
             }
         });
     });
 }
 
-function createFreshHermesGroup(tabId, sessionTitle, groupColor, resolve) {
+function createFreshSocketGroup(tabId, sessionTitle, groupColor, resolve) {
     chrome.tabs.group({ tabIds: tabId }, (groupId) => {
         if (chrome.runtime.lastError) {
             resolve({ status: "error", message: chrome.runtime.lastError.message });
@@ -635,15 +693,8 @@ async function handleExecuteJS(code, sessionTitle, groupColor) {
         };
     }
 
-    if (!humanInControl) {
-        try {
-            await chrome.tabs.sendMessage(tabId, { 
-                type: MT.SHOW_GLOW || "show_glow", 
-                session_title: sessionTitle, 
-                group_color: groupColor 
-            });
-        } catch (e) {}
-    }
+    await sendGlowToTab(tabId, sessionTitle, groupColor);
+
 
     console.log(`Executing dynamic script via CDP in tab ${tabId} (inside secure group '${sessionTitle}')`);
     const target = { tabId: tabId };
@@ -750,7 +801,7 @@ async function scanLocalPorts() {
                 let color = "purple";
                 let id = `discovered_${port}`;
                 
-                if (port === 8000) { name = "Hermes Local"; color = "purple"; id = "hermes"; }
+                if (port === 8000) { name = "AgentSocket Local (e.g. Claude, Hermes, Antigravity)"; color = "purple"; id = "agentsocket_local"; }
                 else if (port === 8500) { name = "Claude Code"; color = "green"; id = "claude"; }
                 else if (port === 9000) { name = "Antigravity Local"; color = "blue"; id = "antigravity"; }
                 else if (port === 9500) { name = "Local Agent 9500"; color = "orange"; }

@@ -1,10 +1,10 @@
 """
-Integration tests for FastAPI gateway endpoints and state machines.
+Integration tests for AgentSocket FastAPI gateway endpoints and state machines.
 """
 
 import unittest
 from fastapi.testclient import TestClient
-from server.bro_server import app, state
+from server.socket_server import app, state
 from server.models import ResponseStatus, ActionType
 
 
@@ -22,7 +22,7 @@ class TestServerEndpoints(unittest.TestCase):
         resp = self.client.get("/")
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
-        self.assertEqual(data["status"], "Agent Bro Hands Server is Live")
+        self.assertEqual(data["status"], "AgentSocket Server is Live")
         self.assertFalse(data["human_in_control"])
         self.assertFalse(data["extension_connected"])
 
@@ -30,7 +30,7 @@ class TestServerEndpoints(unittest.TestCase):
         resp = self.client.get("/status")
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
-        self.assertEqual(data["status"], "Agent Bro Hands Server is Live")
+        self.assertEqual(data["status"], "AgentSocket Server is Live")
         self.assertIn("idle_seconds_remaining", data)
 
     def test_execute_privacy_flag_trigger(self):
@@ -128,6 +128,23 @@ class TestServerEndpoints(unittest.TestCase):
         self.assertEqual(data["status"], ResponseStatus.ERROR.value)
         self.assertEqual(data["message"], "Extension is offline.")
 
+    def test_history_rest_endpoints(self):
+        # 1. Test GET /history
+        resp = self.client.get("/history")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIsInstance(resp.json(), list)
+
+        # 2. Test GET /session/details for non-existent path
+        resp = self.client.get("/session/details?path=non/existent/path")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["status"], "error")
+
+        # 3. Test GET /session/artifact for non-existent artifact
+        resp = self.client.get("/session/artifact?path=non/existent&name=art.json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["status"], "error")
+
 
 if __name__ == "__main__":
     unittest.main()
+

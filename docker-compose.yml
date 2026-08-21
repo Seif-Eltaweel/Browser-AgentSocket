@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  agentsocket:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: agentsocket-browser
+    ports:
+      - "8000:8000"
+    environment:
+      - AGENTSOCKET_PORT=8000
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./server/logs:/app/server/logs
+    restart: unless-stopped

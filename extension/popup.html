@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Agent Bro Hands</title>
+  <title>AgentSocket</title>
   <style>
     :root {
       --bg-main: #191919;
@@ -466,8 +466,8 @@
 <body>
   <div class="header">
     <div class="title-wrapper">
-      <span class="title-icon">🤖</span>
-      <div class="title">Agent Bro Hands</div>
+      <span class="title-icon">🔌</span>
+      <div class="title">AgentSocket</div>
     </div>
     <span id="statusTag" class="status-tag status-auto">Auto Engine</span>
   </div>
@@ -484,36 +484,36 @@
 
   <button id="actionBtn" class="btn btn-takeover">Take Over Control</button>
 
-  <div class="section-title">Agent Servers</div>
+  <div class="section-title">Agent Sockets</div>
   <div id="agentList">
     <!-- Populated dynamically via JS -->
   </div>
 
   <!-- Hidden inline panel for adding/editing servers -->
   <div id="addServerForm" class="edit-form-panel" style="display: none;">
-    <input type="text" id="serverNameInput" placeholder="Server Name (e.g., Claude Code)" />
+    <input type="text" id="serverNameInput" placeholder="Socket Name (e.g., Claude Code)" />
     <input type="text" id="serverUrlInput" placeholder="WS Endpoint (e.g., ws://localhost:8500)" />
     <div class="edit-form-actions">
       <button id="cancelAddBtn" class="btn-small btn-cancel">Cancel</button>
-      <button id="saveAddBtn" class="btn-small btn-save">Add Server</button>
+      <button id="saveAddBtn" class="btn-small btn-save">Plug In Socket</button>
     </div>
   </div>
 
   <!-- Inline panel for editing existing servers -->
   <div id="editServerForm" class="edit-form-panel" style="display: none;">
     <input type="hidden" id="editServerId" />
-    <input type="text" id="editServerNameInput" placeholder="Server Name" />
+    <input type="text" id="editServerNameInput" placeholder="Socket Name" />
     <input type="text" id="editServerUrlInput" placeholder="WS Endpoint" />
     <div class="edit-form-actions">
-      <button id="deleteServerBtn" class="btn-small btn-delete">Delete</button>
+      <button id="deleteServerBtn" class="btn-small btn-delete">Unplug / Delete</button>
       <button id="cancelEditBtn" class="btn-small btn-cancel">Cancel</button>
       <button id="saveEditBtn" class="btn-small btn-save">Save Changes</button>
     </div>
   </div>
 
   <div class="actions-row">
-    <button id="scanAgentsBtn" class="btn-action-outline">🔍 Scan for Agents</button>
-    <button id="addServerBtn" class="btn-action-outline">+ Add Agent Server</button>
+    <button id="scanAgentsBtn" class="btn-action-outline">🔍 Scan for Sockets</button>
+    <button id="addServerBtn" class="btn-action-outline">+ Add Socket</button>
   </div>
 
   <script src="protocol.js"></script>

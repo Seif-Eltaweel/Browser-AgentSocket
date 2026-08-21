@@ -1,15 +1,29 @@
 """
-Unit tests for Launcher utilities and process manager.
+Unit tests for AgentSocket Launcher utilities and process manager.
 """
 
 import os
+import sys
 import unittest
-from server.bro_launcher import (
+
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+from server.socket_launcher import (
     find_chrome_path,
     is_pid_running,
     clean_stale_pid_file,
     get_gateway_status,
-    PID_FILE_PATH
+    PID_FILE_PATH,
+    query_history,
+    get_session_details,
+    get_session_artifact,
+    export_all_timeline,
+    print_history_table,
+    print_session_logs,
 )
 
 
@@ -39,6 +53,24 @@ class TestLauncher(unittest.TestCase):
         self.assertEqual(status["status"], "offline")
         self.assertFalse(status["extension_connected"])
 
+    def test_history_helpers_offline(self):
+        # Even when server is offline, helpers should fall back directly to SessionManager without crashing
+        res = query_history(server_url="http://127.0.0.1:59999")
+        self.assertIsInstance(res, list)
+
+        details = get_session_details("server/logs/dummy_path", server_url="http://127.0.0.1:59999")
+        self.assertIn("status", details)
+
+        art = get_session_artifact("server/logs/dummy_path", "test.json", server_url="http://127.0.0.1:59999")
+        self.assertIn("status", art)
+
+        # Test printing functions do not throw exceptions
+        print_history_table([])
+        print_history_table([{"session_id": "sess_1", "tab_group_name": "Test", "status": "completed"}])
+        print_session_logs({"status": "error", "message": "None"})
+        print_session_logs({"status": "success", "events": [{"event_id": "evt_1", "type": "navigate", "duration_ms": 12.0, "title": "Test"}]})
+
 
 if __name__ == "__main__":
     unittest.main()
+

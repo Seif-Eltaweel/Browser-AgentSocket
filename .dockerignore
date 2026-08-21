@@ -1,0 +1,13 @@
+.venv
+__pycache__
+*.pyc
+*.pyo
+.git
+.gitignore
+.agents
+.pytest_cache
+.vscode
+.idea
+server/logs/sessions/
+server/logs/20*
+.socket_server.pid

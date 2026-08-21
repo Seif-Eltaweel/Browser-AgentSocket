@@ -1,5 +1,5 @@
 /**
- * Agent Bro Hands - Shared Message Protocol & Constants
+ * AgentSocket - Shared Message Protocol & Constants
  * Defines message types, action types, control modes, and standard response envelopes.
  * Compatible with MV3 Service Worker (importScripts), Content Scripts, and Node.js test runners.
  */
@@ -11,7 +11,8 @@
     } else {
         // Browser / Web Worker / Extension Global
         const exports = factory();
-        root.BroProtocol = exports;
+        root.AgentSocketProtocol = exports;
+        root.BroProtocol = exports; // Backwards compatibility alias
         // Also expose individual keys on globalThis for convenient direct access
         Object.assign(root, exports);
     }

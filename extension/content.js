@@ -1,16 +1,16 @@
-// content.js - Agent Bro Hands On-Page HUD & Execution Interactivity (Shadow DOM Isolated)
-console.log('[Agent Bro Hands] Content script active (Shadow DOM Encapsulated).');
+// content.js - AgentSocket On-Page HUD & Execution Interactivity (Shadow DOM Isolated)
+console.log('[AgentSocket] Content script active (Shadow DOM Encapsulated).');
 
-const MT = (typeof MessageTypes !== "undefined") ? MessageTypes : (window.BroProtocol ? window.BroProtocol.MessageTypes : {
+const MT = (typeof MessageTypes !== "undefined") ? MessageTypes : (window.AgentSocketProtocol ? window.AgentSocketProtocol.MessageTypes : (window.BroProtocol ? window.BroProtocol.MessageTypes : {
     SHOW_GLOW: "show_glow",
     SHOW_TAKEOVER: "show_takeover",
     HIDE_GLOW: "hide_glow",
     PAGE_TAKEOVER: "page_takeover",
     PAGE_STOP: "page_stop",
     PAGE_RESUME: "page_resume"
-});
+}));
 
-let currentSessionTitle = "Agent Bro Task";
+let currentSessionTitle = "AgentSocket Task";
 let currentGroupColor = "purple";
 let isShieldActive = false;
 let isTakeoverActive = false;
@@ -23,7 +23,7 @@ let tooltipTimeout = null;
 // ============================================================================
 function keyboardGuard(e) {
     if (!isShieldActive) return;
-    const host = document.getElementById("agent-bro-hud-host");
+    const host = document.getElementById("agentsocket-hud-host");
     if (host && host.shadowRoot) {
         const path = e.composedPath ? e.composedPath() : [];
         if (path.some(el => el === host || (host.shadowRoot && host.shadowRoot.contains(el)))) {
@@ -39,11 +39,37 @@ window.addEventListener("keyup", keyboardGuard, true);
 window.addEventListener("keypress", keyboardGuard, true);
 
 // ============================================================================
-// MESSAGE LISTENER
+// MESSAGE LISTENER & INITIAL SESSION DISCOVERY
 // ============================================================================
+function checkInitialSessionState() {
+    try {
+        chrome.runtime.sendMessage({ type: "CHECK_TAB_SESSION" }, (response) => {
+            if (chrome.runtime.lastError || !response) return;
+            if (response.inActiveSession) {
+                currentSessionTitle = response.session_title || currentSessionTitle;
+                currentGroupColor = response.group_color || currentGroupColor;
+                isTakeoverActive = !!response.human_in_control;
+                if (isTakeoverActive) {
+                    renderTakeoverUI(currentSessionTitle);
+                } else {
+                    renderActiveGlow(currentSessionTitle, currentGroupColor);
+                }
+            }
+        });
+    } catch (e) {
+        // Suppress if runtime is unavailable
+    }
+}
+
+if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", checkInitialSessionState);
+} else {
+    checkInitialSessionState();
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === (MT.SHOW_GLOW || "show_glow")) {
-        currentSessionTitle = message.session_title || "Agent Bro Task";
+        currentSessionTitle = message.session_title || "AgentSocket Task";
         currentGroupColor = message.group_color || "purple";
         if (!isTakeoverActive) {
             renderActiveGlow(currentSessionTitle, currentGroupColor);
@@ -59,6 +85,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     return false;
 });
+
 
 // ============================================================================
 // THEME PALETTE HELPER
@@ -103,10 +130,10 @@ function getThemeColors(colorName) {
 // SHADOW DOM ROOT CONTAINER & TEARDOWN
 // ============================================================================
 function getOrCreateShadowRoot() {
-    let host = document.getElementById("agent-bro-hud-host");
+    let host = document.getElementById("agentsocket-hud-host");
     if (!host) {
-        host = document.createElement("agent-bro-hud-host");
-        host.id = "agent-bro-hud-host";
+        host = document.createElement("agentsocket-hud-host");
+        host.id = "agentsocket-hud-host";
         host.style.cssText = `
             all: initial !important;
             position: fixed !important;
@@ -123,7 +150,6 @@ function getOrCreateShadowRoot() {
         const targetParent = document.documentElement || document.body;
         targetParent.appendChild(host);
     }
-
     let shadow = host.shadowRoot;
     if (!shadow) {
         shadow = host.attachShadow({ mode: "open" });
@@ -133,9 +159,9 @@ function getOrCreateShadowRoot() {
 }
 
 function injectShadowStyles(shadowRoot) {
-    if (shadowRoot.querySelector("#agent-bro-hud-styles")) return;
+    if (shadowRoot.querySelector("#agentsocket-hud-styles")) return;
     const style = document.createElement("style");
-    style.id = "agent-bro-hud-styles";
+    style.id = "agentsocket-hud-styles";
     style.textContent = `
         :host {
             all: initial !important;
@@ -158,11 +184,11 @@ function injectShadowStyles(shadowRoot) {
             box-sizing: border-box !important;
             font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif !important;
         }
-        @keyframes agentBroFadeInUp {
+        @keyframes agentsocketFadeInUp {
             from { opacity: 0; transform: translate(-50%, 8px); }
             to { opacity: 1; transform: translate(-50%, 0); }
         }
-        @keyframes agentBroModalFadeIn {
+        @keyframes agentsocketModalFadeIn {
             from { opacity: 0; transform: scale(0.96); }
             to { opacity: 1; transform: scale(1); }
         }
@@ -187,24 +213,29 @@ function injectShadowStyles(shadowRoot) {
     shadowRoot.appendChild(style);
 }
 
-function clearShadowRootViews(shadowRoot) {
-    const children = Array.from(shadowRoot.children);
-    for (const child of children) {
-        if (child.id !== "agent-bro-hud-styles") {
-            child.remove();
+function clearShadowContent(shadowRoot) {
+    if (!shadowRoot) return;
+    const children = Array.from(shadowRoot.childNodes);
+    children.forEach(child => {
+        if (child.id !== "agentsocket-hud-styles") {
+            shadowRoot.removeChild(child);
         }
-    }
+    });
+}
+
+function clearShadowRootViews(shadowRoot) {
+    clearShadowContent(shadowRoot);
 }
 
 function removeAllUI() {
     isShieldActive = false;
     isTakeoverActive = false;
-    clearTimeout(tooltipTimeout);
-    const host = document.getElementById("agent-bro-hud-host");
+    const host = document.getElementById("agentsocket-hud-host");
     if (host && host.parentNode) {
         host.parentNode.removeChild(host);
     }
 }
+
 
 // ============================================================================
 // 1. ACTIVE RUNNING STATE: Viewport Frame & Floating HUD Pill & Shield
@@ -281,7 +312,7 @@ function renderActiveGlow(sessionTitle, groupColor) {
         align-items: center !important;
         gap: 10px !important;
         box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45) !important;
-        animation: agentBroFadeInUp 0.2s ease-out !important;
+        animation: agentSocketFadeInUp 0.2s ease-out !important;
         box-sizing: border-box !important;
     `;
 
@@ -306,7 +337,7 @@ function renderActiveGlow(sessionTitle, groupColor) {
         color: #EDEDED !important;
         font-size: 12px !important;
     `;
-    label.innerHTML = `<span>🤖</span> <span>${escapeHtml(sessionTitle)}</span> <span style="font-size: 11px; color: #8F8E8B; font-weight: 400;">is active</span>`;
+    label.innerHTML = `<span>🔌</span> <span>${escapeHtml(sessionTitle)}</span> <span style="font-size: 11px; color: #8F8E8B; font-weight: 400;">is active</span>`;
 
     // Action buttons container
     const btnGroup = document.createElement("div");
@@ -438,7 +469,7 @@ function renderTakeoverUI(sessionTitle) {
         align-items: center !important;
         gap: 10px !important;
         box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45) !important;
-        animation: agentBroFadeInUp 0.2s ease-out !important;
+        animation: agentSocketFadeInUp 0.2s ease-out !important;
         box-sizing: border-box !important;
     `;
 
@@ -541,7 +572,7 @@ function renderNotesModal(sessionTitle) {
         padding: 20px !important;
         color: #e3e2de !important;
         box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6) !important;
-        animation: agentBroModalFadeIn 0.15s ease-out !important;
+        animation: agentSocketModalFadeIn 0.15s ease-out !important;
         box-sizing: border-box !important;
     `;
 

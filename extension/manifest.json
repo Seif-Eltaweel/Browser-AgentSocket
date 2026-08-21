@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Agent Bro Hands",
+  "name": "AgentSocket",
   "version": "1.1.0",
-  "description": "Multi-agent browser automation operator client and state control hub.",
+  "description": "Multi-agent browser automation operator client and socket control hub.",
   "permissions": [
     "activeTab",
     "scripting",

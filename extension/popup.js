@@ -1,9 +1,9 @@
 // popup.js
 const DEFAULT_SERVERS = [
-    { id: "hermes", name: "Hermes Local", url: "ws://127.0.0.1:8000/ws/extension", enabled: true, color: "purple" },
+    { id: "agentsocket_local", name: "AgentSocket Local (e.g. Claude, Hermes, Antigravity)", url: "ws://127.0.0.1:8000/ws/extension", enabled: true, color: "purple" },
     { id: "antigravity", name: "Antigravity Local", url: "ws://127.0.0.1:9000/ws/extension", enabled: false, color: "blue" },
     { id: "claude", name: "Claude Code", url: "ws://127.0.0.1:8500/ws/extension", enabled: false, color: "green" },
-    { id: "vps", name: "Hostinger VPS", url: "wss://yourvps.com/ws/extension", enabled: false, color: "red" }
+    { id: "vps", name: "Custom Agent / VPS", url: "wss://yourvps.com/ws/extension", enabled: false, color: "red" }
 ];
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -100,6 +100,19 @@ document.addEventListener("DOMContentLoaded", () => {
             if (!servers) {
                 servers = DEFAULT_SERVERS;
                 chrome.storage.local.set({ agent_servers: servers });
+            } else {
+                let migrated = false;
+                servers = servers.map(s => {
+                    if (s.id === "hermes") {
+                        s.id = "agentsocket_local";
+                        s.name = "AgentSocket Local (e.g. Claude, Hermes, Antigravity)";
+                        migrated = true;
+                    }
+                    return s;
+                });
+                if (migrated) {
+                    chrome.storage.local.set({ agent_servers: servers });
+                }
             }
             renderServersList(servers);
         });
