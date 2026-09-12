@@ -150,11 +150,18 @@ Test instructions.
         self.assertEqual(borrow_res["status"], "success")
         target_dir = borrow_res["target_session_dir"]
 
-        # Check copied files
+        # Check copied files: sub_skill.md and session_manifest.json exist, tools remain referenced (Spec 18)
         self.assertTrue(os.path.exists(os.path.join(target_dir, "sub_skill.md")))
-        self.assertTrue(os.path.exists(os.path.join(target_dir, "adhocs", "probe_dom.py")))
+        self.assertTrue(os.path.exists(os.path.join(target_dir, "session_manifest.json")))
+        # Lean staging: tools are referenced, not physically duplicated into target adhocs/
+        self.assertFalse(os.path.exists(os.path.join(target_dir, "adhocs", "probe_dom.py")))
         self.assertTrue(os.path.exists(os.path.join(target_dir, "input", "sample_input.csv")))
         self.assertTrue(os.path.exists(os.path.join(target_dir, "SESSION_DOCUMENT.md")))
+
+        # Check hierarchical resolution resolves probe_dom.py via subskill tier
+        resolved = self.manager.resolve_adhoc("probe_dom.py", target_dir)
+        self.assertTrue(resolved["found"])
+        self.assertEqual(resolved["tier"], "subskill")
 
         # Check borrow counter incremented in index
         details = self.manager.get_subskill("borrow-target-skill")

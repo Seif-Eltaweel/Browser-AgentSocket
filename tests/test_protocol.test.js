@@ -15,6 +15,7 @@ assert.strictEqual(protocol.MessageTypes.PAGE_TAKEOVER, 'page_takeover');
 assert.strictEqual(protocol.MessageTypes.PAGE_RESUME, 'page_resume');
 assert.strictEqual(protocol.MessageTypes.PAGE_STOP, 'page_stop');
 assert.strictEqual(protocol.MessageTypes.SHOW_GLOW, 'show_glow');
+assert.strictEqual(protocol.MessageTypes.UPDATE_PROGRESS, 'update_progress');
 console.log('✓ MessageTypes verified.');
 
 // 2. Validate ActionTypes

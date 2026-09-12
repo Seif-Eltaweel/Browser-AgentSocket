@@ -112,14 +112,53 @@ server/logs/YYYY-MM-DD/<Session_Title>_<time>_gid<ID>/
 ├── SESSION_DOCUMENT.md     # Consolidated full report with executive summary & thread
 ├── session.jsonl           # Append-only chronological event log stream
 ├── sub_skill.md            # Reusable playbook contract with selectors & rules
-├── input/                  # Input datasets & source batch CSVs
+├── input/                  # Input datasets, source batch CSVs, and implementation plans
+│   └── implementation_plan.md  # 📝 Mandatory task implementation plan
 ├── output/                 # Deliverables, scraped datasets, enriched CSVs
 ├── adhocs/                 # Diagnostic probes, scripts, and helper engines
 └── artifacts/              # Screenshots & offloaded JSON payloads
 ```
 
+---
+
+## 📝 Mandatory Session Protocol: `input/implementation_plan.md`
+
+> [!IMPORTANT]
+> **Rule for AI Agents**: Whenever you initialize or start any new browser automation session, you **MUST write an `implementation_plan.md` file inside the session's `input/` folder** before executing tasks.
+
+### 📊 Standard Step Tracking & Progress Bar Format:
+To allow the system, UI HUD, and human operators to calculate the real-time **completion progress bar** (`(completed_steps / total_steps) * 100%`), all execution steps **MUST** be written as explicit, numbered checklist items:
+
+```markdown
+# 🎯 Session Implementation Plan: <Task Title>
+
+## 1. 📌 Metadata & Objective
+* **Session Title:** `<Friendly Title>`
+* **Objective:** <Single sentence objective>
+* **Total Atomic Steps:** 5
 
 ---
+
+## 2. 🛠️ Execution Steps & Real-Time Progress
+*Progress: [██████░░░░] 3/5 Steps Complete (60%)*
+
+- [x] **Step 1: [VERIFY_AUTH]** Navigate to `https://example.com/feed` and verify user session.
+- [x] **Step 2: [LOCATE_INPUT]** Focus query field (`input#search-box`) and submit search term.
+- [x] **Step 3: [LAZY_LOAD]** Execute smooth scrolling to load all 10 target items into DOM.
+- [ ] **Step 4: [DATA_SCRAPE]** Run CDP extraction script and save payload to `output/results.json`.
+- [ ] **Step 5: [COMPLETE_TASK]** Validate output records count > 0 and dispatch `task_complete`.
+
+---
+
+## 3. 📦 Deliverables Contract
+* **Target Output:** `output/results.json` (JSON Array)
+* **Schema:** `[{"id": str, "title": str, "url": str}]`
+```
+
+*As the agent or operator completes each atomic step, it marks `- [x] Step N` in `input/implementation_plan.md`, enabling automatic progress tracking across the HUD and `SESSION_DOCUMENT.md`.*
+
+---
+
 
 ## 📡 REST API Endpoints & Interaction Patterns
 
@@ -154,8 +193,7 @@ curl -X POST http://127.0.0.1:8000/execute \
     "action_type": "navigate",
     "target_data": "https://example.com",
     "requires_privacy_check": false,
-    "session_title": "Example Session",
-    "group_color": "purple"
+    "session_title": "Example Session"
   }'
 ```
 
@@ -164,8 +202,7 @@ curl -X POST http://127.0.0.1:8000/execute \
 * `action_type` (string): `navigate` | `execute_js` | `task_complete`.
 * `target_data` (string): The URL to navigate to, or the JavaScript code string to run.
 * `requires_privacy_check` (boolean): Set to `true` to force a human takeover check immediately.
-* `session_title` (string, optional): Title of the automation tab group.
-* `group_color` (string, optional): UI group color indicator (e.g. `purple`, `blue`, `green`, `red`).
+* `session_title` (string, required): Descriptive title provided by the agent for this browser task/tab group.
 
 ---
 

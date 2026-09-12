@@ -1,20 +1,68 @@
 // content.js - AgentSocket On-Page HUD & Execution Interactivity (Shadow DOM Isolated)
 console.log('[AgentSocket] Content script active (Shadow DOM Encapsulated).');
 
-const MT = (typeof MessageTypes !== "undefined") ? MessageTypes : (window.AgentSocketProtocol ? window.AgentSocketProtocol.MessageTypes : (window.BroProtocol ? window.BroProtocol.MessageTypes : {
+const MT = (typeof MessageTypes !== "undefined") ? MessageTypes : (window.AgentSocketProtocol ? window.AgentSocketProtocol.MessageTypes : {
     SHOW_GLOW: "show_glow",
     SHOW_TAKEOVER: "show_takeover",
     HIDE_GLOW: "hide_glow",
     PAGE_TAKEOVER: "page_takeover",
     PAGE_STOP: "page_stop",
-    PAGE_RESUME: "page_resume"
-}));
+    PAGE_RESUME: "page_resume",
+    UPDATE_PROGRESS: "update_progress"
+});
 
 let currentSessionTitle = "AgentSocket Task";
 let currentGroupColor = "purple";
 let isShieldActive = false;
 let isTakeoverActive = false;
 let tooltipTimeout = null;
+let currentProgress = {
+    percent: 0,
+    currentStep: 0,
+    totalSteps: 0,
+    stepTitle: ""
+};
+
+function computeProgressPercent(data) {
+    if (!data) return 0;
+    if (typeof data.percent === "number" && !isNaN(data.percent) && data.percent > 0) {
+        return Math.min(Math.max(data.percent, 0), 100);
+    }
+    if (data.totalSteps > 0 && typeof data.currentStep === "number" && data.currentStep > 0) {
+        return Math.min(Math.max(Math.round((data.currentStep / data.totalSteps) * 100), 0), 100);
+    }
+    if (typeof data.percent === "number" && !isNaN(data.percent)) {
+        return Math.min(Math.max(data.percent, 0), 100);
+    }
+    return 0;
+}
+
+// Client-side progress persistence
+function loadStoredProgress() {
+    try {
+        const stored = sessionStorage.getItem("agentsocket_hud_progress");
+        if (stored) {
+            const parsed = JSON.parse(stored);
+            if (parsed && typeof parsed === "object") {
+                currentProgress.percent = parsed.percent ?? currentProgress.percent;
+                currentProgress.currentStep = parsed.currentStep ?? currentProgress.currentStep;
+                currentProgress.totalSteps = parsed.totalSteps ?? currentProgress.totalSteps;
+                currentProgress.stepTitle = parsed.stepTitle ?? currentProgress.stepTitle;
+                if (currentProgress.totalSteps > 0 && (!currentProgress.percent || currentProgress.percent === 0)) {
+                    currentProgress.percent = computeProgressPercent(currentProgress);
+                }
+            }
+        }
+    } catch (e) {}
+}
+
+function saveStoredProgress(progress) {
+    try {
+        sessionStorage.setItem("agentsocket_hud_progress", JSON.stringify(progress));
+    } catch (e) {}
+}
+
+loadStoredProgress();
 
 // ============================================================================
 // KEYBOARD GUARD (INTERACTION SHIELD)
@@ -49,6 +97,15 @@ function checkInitialSessionState() {
                 currentSessionTitle = response.session_title || currentSessionTitle;
                 currentGroupColor = response.group_color || currentGroupColor;
                 isTakeoverActive = !!response.human_in_control;
+                if (response.progress_percent !== undefined || response.step_total !== undefined) {
+                    currentProgress.currentStep = response.step_current ?? currentProgress.currentStep;
+                    currentProgress.totalSteps = response.step_total ?? currentProgress.totalSteps;
+                    currentProgress.stepTitle = response.step_title ?? currentProgress.stepTitle;
+                    currentProgress.percent = response.progress_percent !== undefined 
+                        ? response.progress_percent 
+                        : computeProgressPercent(currentProgress);
+                    saveStoredProgress(currentProgress);
+                }
                 if (isTakeoverActive) {
                     renderTakeoverUI(currentSessionTitle);
                 } else {
@@ -68,62 +125,122 @@ if (document.readyState === "loading") {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.type === (MT.SHOW_GLOW || "show_glow")) {
-        currentSessionTitle = message.session_title || "AgentSocket Task";
-        currentGroupColor = message.group_color || "purple";
-        if (!isTakeoverActive) {
-            renderActiveGlow(currentSessionTitle, currentGroupColor);
-        }
-        sendResponse({ status: "success" });
-    } else if (message.type === (MT.SHOW_TAKEOVER || "show_takeover")) {
-        currentSessionTitle = message.session_title || currentSessionTitle;
-        renderTakeoverUI(currentSessionTitle);
-        sendResponse({ status: "success" });
-    } else if (message.type === (MT.HIDE_GLOW || "hide_glow")) {
-        removeAllUI();
-        sendResponse({ status: "success" });
+    switch (message.type) {
+        case MT.SHOW_GLOW:
+        case "show_glow":
+            currentSessionTitle = message.session_title || "AgentSocket Task";
+            currentGroupColor = message.group_color || "purple";
+            if (message.progress_percent !== undefined || message.step_total !== undefined) {
+                currentProgress.currentStep = message.step_current ?? currentProgress.currentStep;
+                currentProgress.totalSteps = message.step_total ?? currentProgress.totalSteps;
+                currentProgress.stepTitle = message.step_title ?? currentProgress.stepTitle;
+                currentProgress.percent = message.progress_percent !== undefined 
+                    ? message.progress_percent 
+                    : computeProgressPercent(currentProgress);
+                saveStoredProgress(currentProgress);
+            }
+            if (!isTakeoverActive) {
+                renderActiveGlow(currentSessionTitle, currentGroupColor);
+            }
+            sendResponse({ status: "success" });
+            break;
+
+        case MT.SHOW_TAKEOVER:
+        case "show_takeover":
+            currentSessionTitle = message.session_title || currentSessionTitle;
+            if (message.progress_percent !== undefined || message.step_total !== undefined) {
+                currentProgress.currentStep = message.step_current ?? currentProgress.currentStep;
+                currentProgress.totalSteps = message.step_total ?? currentProgress.totalSteps;
+                currentProgress.stepTitle = message.step_title ?? currentProgress.stepTitle;
+                currentProgress.percent = message.progress_percent !== undefined 
+                    ? message.progress_percent 
+                    : computeProgressPercent(currentProgress);
+                saveStoredProgress(currentProgress);
+            }
+            renderTakeoverUI(currentSessionTitle);
+            sendResponse({ status: "success" });
+            break;
+
+        case MT.UPDATE_PROGRESS:
+        case "update_progress":
+            if (message.progress) {
+                currentProgress = {
+                    percent: message.progress.percent ?? currentProgress.percent,
+                    currentStep: message.progress.currentStep ?? currentProgress.currentStep,
+                    totalSteps: message.progress.totalSteps ?? currentProgress.totalSteps,
+                    stepTitle: message.progress.stepTitle ?? currentProgress.stepTitle
+                };
+            } else {
+                if (message.step_current !== undefined) currentProgress.currentStep = message.step_current;
+                if (message.step_total !== undefined) currentProgress.totalSteps = message.step_total;
+                if (message.step_title !== undefined) currentProgress.stepTitle = message.step_title;
+                if (message.progress_percent !== undefined) {
+                    currentProgress.percent = message.progress_percent;
+                } else {
+                    currentProgress.percent = computeProgressPercent(currentProgress);
+                }
+            }
+            saveStoredProgress(currentProgress);
+            updateHudProgressBar(currentProgress, isTakeoverActive ? "red" : currentGroupColor);
+            sendResponse({ status: "success" });
+            break;
+
+        case MT.HIDE_GLOW:
+        case "hide_glow":
+            removeAllUI();
+            sendResponse({ status: "success" });
+            break;
+
+        default:
+            break;
     }
     return false;
 });
 
-
 // ============================================================================
 // THEME PALETTE HELPER
 // ============================================================================
+// COLOR PALETTE & THEME SELECTION (Vibrant Ambient Glows)
+// ============================================================================
 function getThemeColors(colorName) {
     const palette = {
-        purple: {
-            borderHex: "#9A6DD7",
-            subtleBorder: "rgba(154, 109, 215, 0.45)",
-            tagBg: "rgba(154, 109, 215, 0.08)",
-            tagText: "#9A6DD7"
-        },
         blue: {
-            borderHex: "#529CCA",
-            subtleBorder: "rgba(82, 156, 202, 0.45)",
-            tagBg: "rgba(82, 156, 202, 0.08)",
-            tagText: "#529CCA"
+            borderHex: "#38BDF8",
+            glowRgba: "rgba(56, 189, 248, 0.55)",
+            auraRgba: "rgba(56, 189, 248, 0.18)",
+            subtleBorder: "rgba(56, 189, 248, 0.4)",
+            tagText: "#38BDF8"
+        },
+        purple: {
+            borderHex: "#A855F7",
+            glowRgba: "rgba(168, 85, 247, 0.55)",
+            auraRgba: "rgba(168, 85, 247, 0.18)",
+            subtleBorder: "rgba(168, 85, 247, 0.4)",
+            tagText: "#C084FC"
         },
         green: {
-            borderHex: "#4DAB9A",
-            subtleBorder: "rgba(77, 171, 154, 0.45)",
-            tagBg: "rgba(77, 171, 154, 0.08)",
-            tagText: "#4DAB9A"
+            borderHex: "#10B981",
+            glowRgba: "rgba(16, 185, 129, 0.55)",
+            auraRgba: "rgba(16, 185, 129, 0.18)",
+            subtleBorder: "rgba(16, 185, 129, 0.4)",
+            tagText: "#34D399"
         },
         orange: {
-            borderHex: "#FFAB40",
-            subtleBorder: "rgba(255, 171, 64, 0.45)",
-            tagBg: "rgba(255, 171, 64, 0.08)",
-            tagText: "#FFAB40"
+            borderHex: "#FB923C",
+            glowRgba: "rgba(251, 146, 60, 0.55)",
+            auraRgba: "rgba(251, 146, 60, 0.18)",
+            subtleBorder: "rgba(251, 146, 60, 0.4)",
+            tagText: "#FB923C"
         },
         red: {
-            borderHex: "#FF7369",
-            subtleBorder: "rgba(255, 115, 105, 0.45)",
-            tagBg: "rgba(255, 115, 105, 0.08)",
-            tagText: "#FF7369"
+            borderHex: "#F87171",
+            glowRgba: "rgba(248, 113, 113, 0.55)",
+            auraRgba: "rgba(248, 113, 113, 0.18)",
+            subtleBorder: "rgba(248, 113, 113, 0.4)",
+            tagText: "#F87171"
         }
     };
-    return palette[colorName] || palette.purple;
+    return palette[colorName] || palette.blue;
 }
 
 // ============================================================================
@@ -164,50 +281,47 @@ function injectShadowStyles(shadowRoot) {
     style.id = "agentsocket-hud-styles";
     style.textContent = `
         :host {
-            all: initial !important;
-            position: fixed !important;
-            top: 0 !important;
-            left: 0 !important;
-            right: 0 !important;
-            bottom: 0 !important;
-            width: 100vw !important;
-            height: 100vh !important;
-            pointer-events: none !important;
-            z-index: 2147483647 !important;
-            font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif !important;
-            font-size: 12px !important;
-            line-height: 1.4 !important;
-            box-sizing: border-box !important;
-            -webkit-font-smoothing: antialiased !important;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            font-size: 13px;
+            line-height: 1.4;
+            box-sizing: border-box;
+            -webkit-font-smoothing: antialiased;
         }
         * {
-            box-sizing: border-box !important;
-            font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif !important;
+            box-sizing: border-box;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
         }
-        @keyframes agentsocketFadeInUp {
-            from { opacity: 0; transform: translate(-50%, 8px); }
+        @keyframes agentSocketFadeInUp {
+            from { opacity: 0; transform: translate(-50%, 12px); }
             to { opacity: 1; transform: translate(-50%, 0); }
         }
-        @keyframes agentsocketModalFadeIn {
-            from { opacity: 0; transform: scale(0.96); }
-            to { opacity: 1; transform: scale(1); }
+        @keyframes agentSocketPulse {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.25); opacity: 0.7; }
+        }
+        @keyframes agentAuraBreathe {
+            0%, 100% { opacity: 0.95; }
+            50% { opacity: 0.75; }
         }
         .ab-btn {
-            font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif !important;
-            font-size: 11.5px !important;
-            font-weight: 500 !important;
-            padding: 4px 10px !important;
-            border-radius: 4px !important;
-            cursor: pointer !important;
-            transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease !important;
-            display: inline-flex !important;
-            align-items: center !important;
-            gap: 5px !important;
-            pointer-events: auto !important;
-            user-select: none !important;
-            outline: none !important;
-            border: 1px solid transparent !important;
-            box-sizing: border-box !important;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            font-size: 12px;
+            font-weight: 500;
+            padding: 5px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            pointer-events: auto;
+            user-select: none;
+            outline: none;
+            border: 1px solid transparent;
+            box-sizing: border-box;
+        }
+        .ab-btn:active {
+            transform: scale(0.97);
         }
     `;
     shadowRoot.appendChild(style);
@@ -223,10 +337,6 @@ function clearShadowContent(shadowRoot) {
     });
 }
 
-function clearShadowRootViews(shadowRoot) {
-    clearShadowContent(shadowRoot);
-}
-
 function removeAllUI() {
     isShieldActive = false;
     isTakeoverActive = false;
@@ -236,32 +346,35 @@ function removeAllUI() {
     }
 }
 
-
 // ============================================================================
-// 1. ACTIVE RUNNING STATE: Viewport Frame & Floating HUD Pill & Shield
+// 1. ACTIVE RUNNING STATE: Vibrant Glow Frame & Bottom Control Pill & Shield
 // ============================================================================
 function renderActiveGlow(sessionTitle, groupColor) {
     const shadow = getOrCreateShadowRoot();
-    clearShadowRootViews(shadow);
+    clearShadowContent(shadow);
     isShieldActive = true;
     isTakeoverActive = false;
 
     const theme = getThemeColors(groupColor);
 
-    // A. Full Viewport Border Frame (Clean Notion-style Accent Outline)
+    // A. Full Viewport Border Frame & Ambient Top Aura
     const glowFrame = document.createElement("div");
     glowFrame.id = "ab-glow-frame";
     glowFrame.style.cssText = `
-        position: absolute !important;
+        position: fixed !important;
         top: 0 !important;
         left: 0 !important;
         right: 0 !important;
         bottom: 0 !important;
+        width: 100vw !important;
+        height: 100vh !important;
         pointer-events: none !important;
-        border: 2px solid ${theme.borderHex} !important;
-        box-shadow: inset 0 0 12px rgba(0, 0, 0, 0.25) !important;
+        border: 3.5px solid ${theme.borderHex} !important;
+        box-shadow: inset 0 0 32px ${theme.glowRgba}, 0 0 20px ${theme.glowRgba} !important;
+        background: radial-gradient(ellipse 110% 45% at 50% 0%, ${theme.auraRgba} 0%, rgba(255, 255, 255, 0) 75%) !important;
         box-sizing: border-box !important;
         z-index: 2147483645 !important;
+        animation: agentAuraBreathe 3s infinite ease-in-out !important;
     `;
     shadow.appendChild(glowFrame);
 
@@ -269,15 +382,17 @@ function renderActiveGlow(sessionTitle, groupColor) {
     const shield = document.createElement("div");
     shield.id = "ab-interaction-shield";
     shield.style.cssText = `
-        position: absolute !important;
+        position: fixed !important;
         top: 0 !important;
         left: 0 !important;
         right: 0 !important;
         bottom: 0 !important;
+        width: 100vw !important;
+        height: 100vh !important;
         z-index: 2147483646 !important;
         pointer-events: auto !important;
         cursor: not-allowed !important;
-        background: rgba(0, 0, 0, 0.03) !important;
+        background: rgba(0, 0, 0, 0.02) !important;
     `;
 
     // Intercept mouse interactions and show helpful takeover tooltip
@@ -293,98 +408,293 @@ function renderActiveGlow(sessionTitle, groupColor) {
 
     shadow.appendChild(shield);
 
-    // C. Bottom Floating HUD Pill
+    // C. Bottom Floating HUD Pill (Screenshot / Manus Style)
     const pill = document.createElement("div");
     pill.id = "ab-control-pill";
     pill.style.cssText = `
-        position: absolute !important;
+        position: fixed !important;
         bottom: 20px !important;
         left: 50% !important;
-        transform: translate(-50%, 0) !important;
+        transform: translateX(-50%) !important;
+        min-width: 360px !important;
+        max-width: 90vw !important;
+        display: flex !important;
+        flex-direction: column !important;
+        gap: 7px !important;
+        padding: 10px 16px 9px 16px !important;
+        box-sizing: border-box !important;
         z-index: 2147483647 !important;
         pointer-events: auto !important;
-        background: #202020 !important;
-        border: 1px solid #333333 !important;
-        border-radius: 6px !important;
-        padding: 5px 10px !important;
-        color: #e3e2de !important;
-        display: flex !important;
-        align-items: center !important;
-        gap: 10px !important;
-        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45) !important;
-        animation: agentSocketFadeInUp 0.2s ease-out !important;
-        box-sizing: border-box !important;
+        background: #18181b !important;
+        border: 1px solid rgba(255, 255, 255, 0.15) !important;
+        border-radius: 18px !important;
+        color: #f4f4f5 !important;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.05) !important;
+        animation: agentSocketFadeInUp 0.25s ease-out !important;
+        backdrop-filter: blur(12px) !important;
     `;
 
-    // Dot indicator
+    // Row 1: Title & Controls
+    const topRow = document.createElement("div");
+    topRow.style.cssText = `
+        display: flex !important;
+        align-items: center !important;
+        justify-content: space-between !important;
+        width: 100% !important;
+        gap: 12px !important;
+    `;
+
+    const leftGroup = document.createElement("div");
+    leftGroup.style.cssText = `
+        display: flex !important;
+        align-items: center !important;
+        gap: 8px !important;
+        overflow: hidden !important;
+    `;
+
+    const isInitialCompleted = (currentProgress.percent >= 100) || (currentProgress.totalSteps > 0 && currentProgress.currentStep >= currentProgress.totalSteps);
+
+    // Pulsing dot indicator
     const dot = document.createElement("span");
     dot.style.cssText = `
-        width: 7px !important;
-        height: 7px !important;
-        background: ${theme.borderHex} !important;
-        border-radius: 50% !important;
-        display: inline-block !important;
-        flex-shrink: 0 !important;
+        width: 8px;
+        height: 8px;
+        background: ${isInitialCompleted ? '#10B981' : theme.borderHex};
+        border-radius: 50%;
+        display: inline-block;
+        flex-shrink: 0;
+        box-shadow: ${isInitialCompleted ? '0 0 10px #10B981' : `0 0 8px ${theme.borderHex}`};
+        ${isInitialCompleted ? '' : 'animation: agentSocketPulse 1.8s infinite ease-in-out;'};
     `;
 
     // Title label
     const label = document.createElement("div");
     label.style.cssText = `
-        display: flex !important;
-        align-items: center !important;
-        gap: 6px !important;
-        font-weight: 500 !important;
-        color: #EDEDED !important;
-        font-size: 12px !important;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-weight: 500;
+        color: #ffffff;
+        font-size: 13px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
     `;
-    label.innerHTML = `<span>🔌</span> <span>${escapeHtml(sessionTitle)}</span> <span style="font-size: 11px; color: #8F8E8B; font-weight: 400;">is active</span>`;
+    label.innerHTML = `<span>⚡</span> <span>${escapeHtml(sessionTitle)}</span>`;
+
+    leftGroup.appendChild(dot);
+    leftGroup.appendChild(label);
 
     // Action buttons container
     const btnGroup = document.createElement("div");
-    btnGroup.style.cssText = `display: flex !important; align-items: center !important; gap: 6px !important; margin-left: 4px !important;`;
+    btnGroup.style.cssText = `display: flex; align-items: center; gap: 8px; flex-shrink: 0;`;
 
-    // Take Over button
+    // Take Over button (Label preserved invariant as 'Take Over')
     const takeoverBtn = document.createElement("button");
     takeoverBtn.className = "ab-btn";
-    takeoverBtn.innerHTML = "<span>✋</span> <span>Take Over</span>";
+    takeoverBtn.innerHTML = "<span>Take Over</span>";
     takeoverBtn.style.cssText += `
-        background: #eb5757 !important;
-        color: #ffffff !important;
+        background: rgba(255, 255, 255, 0.1) !important;
+        border: 1px solid rgba(255, 255, 255, 0.2) !important;
+        color: #e4e4e7 !important;
+        font-size: 12px !important;
+        padding: 4px 11px !important;
+        border-radius: 12px !important;
     `;
-    takeoverBtn.onmouseenter = () => { takeoverBtn.style.background = "#d84343"; };
-    takeoverBtn.onmouseleave = () => { takeoverBtn.style.background = "#eb5757"; };
+    takeoverBtn.onmouseenter = () => { takeoverBtn.style.background = "rgba(255, 255, 255, 0.18)"; };
+    takeoverBtn.onmouseleave = () => { takeoverBtn.style.background = "rgba(255, 255, 255, 0.1)"; };
     takeoverBtn.onclick = () => {
         renderTakeoverUI(sessionTitle);
         chrome.runtime.sendMessage({
-            type: MT.PAGE_TAKEOVER || "page_takeover",
+            type: MT.PAGE_TAKEOVER,
             notes: `Operator initiated manual takeover on ${window.location.hostname}`
         });
     };
 
-    // Stop button
+    // Stop button (Vibrant Red Pill Button)
     const stopBtn = document.createElement("button");
     stopBtn.className = "ab-btn";
-    stopBtn.innerHTML = "<span>⏹</span> <span>Stop</span>";
+    stopBtn.innerHTML = "<span>Stop</span>";
     stopBtn.style.cssText += `
-        background: #282828 !important;
-        border: 1px solid #333333 !important;
-        color: #9b9b9b !important;
+        background: #ef4444 !important;
+        color: #ffffff !important;
+        font-weight: 600 !important;
+        font-size: 12px !important;
+        padding: 4px 12px !important;
+        border-radius: 12px !important;
+        border: none !important;
+        box-shadow: 0 2px 8px rgba(239, 68, 68, 0.4) !important;
     `;
-    stopBtn.onmouseenter = () => { stopBtn.style.background = "#303030"; stopBtn.style.color = "#e3e2de"; };
-    stopBtn.onmouseleave = () => { stopBtn.style.background = "#282828"; stopBtn.style.color = "#9b9b9b"; };
+    stopBtn.onmouseenter = () => { stopBtn.style.background = "#dc2626"; };
+    stopBtn.onmouseleave = () => { stopBtn.style.background = "#ef4444"; };
     stopBtn.onclick = () => {
-        chrome.runtime.sendMessage({ type: MT.PAGE_STOP || "page_stop" });
+        chrome.runtime.sendMessage({ type: MT.PAGE_STOP });
         removeAllUI();
     };
 
     btnGroup.appendChild(takeoverBtn);
     btnGroup.appendChild(stopBtn);
 
-    pill.appendChild(dot);
-    pill.appendChild(label);
-    pill.appendChild(btnGroup);
+    topRow.appendChild(leftGroup);
+    topRow.appendChild(btnGroup);
+
+    // Row 2: Completion Progress Bar
+    const progressSection = createProgressSection(currentProgress, theme);
+
+    pill.appendChild(topRow);
+    pill.appendChild(progressSection);
 
     shadow.appendChild(pill);
+}
+
+// ============================================================================
+// PROGRESS BAR SECTION HELPER & LIVE UPDATES
+// ============================================================================
+function createProgressSection(progressData, theme) {
+    const container = document.createElement("div");
+    container.id = "ab-progress-section";
+    container.style.cssText = `
+        width: 100% !important;
+        display: flex !important;
+        flex-direction: column !important;
+        gap: 4px !important;
+        box-sizing: border-box !important;
+    `;
+
+    // Track
+    const track = document.createElement("div");
+    track.id = "ab-progress-track";
+    track.style.cssText = `
+        width: 100% !important;
+        height: 4.5px !important;
+        background: rgba(255, 255, 255, 0.12) !important;
+        border-radius: 999px !important;
+        overflow: hidden !important;
+        position: relative !important;
+    `;
+
+    const percent = computeProgressPercent(progressData);
+    const isCompleted = percent >= 100 || (progressData.totalSteps > 0 && progressData.currentStep >= progressData.totalSteps);
+
+    const fill = document.createElement("div");
+    fill.id = "ab-progress-fill";
+    const bgGradient = isCompleted
+        ? "linear-gradient(90deg, #10B981, #34D399)"
+        : `linear-gradient(90deg, ${theme.borderHex}, #60a5fa)`;
+    const glowColor = isCompleted ? "rgba(16, 185, 129, 0.55)" : theme.glowRgba;
+
+    fill.style.cssText = `
+        width: ${percent}% !important;
+        height: 100% !important;
+        background: ${bgGradient} !important;
+        border-radius: 999px !important;
+        transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1) !important;
+        box-shadow: 0 0 8px ${glowColor} !important;
+    `;
+    track.appendChild(fill);
+
+    // Labels Row
+    const labelsRow = document.createElement("div");
+    labelsRow.id = "ab-progress-labels";
+    labelsRow.style.cssText = `
+        display: flex !important;
+        justify-content: space-between !important;
+        align-items: center !important;
+        font-size: 11px !important;
+        color: #a1a1aa !important;
+        line-height: 1 !important;
+        padding: 0 2px !important;
+    `;
+
+    const stepLabel = document.createElement("span");
+    stepLabel.id = "ab-progress-step-text";
+    if (isCompleted) {
+        stepLabel.innerText = "✅ Task Complete (100%)";
+    } else if (progressData.totalSteps > 0) {
+        stepLabel.innerText = `Step ${progressData.currentStep} of ${progressData.totalSteps}${progressData.stepTitle ? ` • ${progressData.stepTitle}` : ''}`;
+    } else {
+        stepLabel.innerText = "Task in progress...";
+    }
+
+    const percentLabel = document.createElement("span");
+    percentLabel.id = "ab-progress-percent-text";
+    const tagTextColor = isCompleted ? "#34D399" : (theme.tagText || '#38bdf8');
+    percentLabel.style.cssText = `font-weight: 600; color: ${tagTextColor};`;
+    percentLabel.innerText = `${Math.round(percent)}%`;
+
+    labelsRow.appendChild(stepLabel);
+    labelsRow.appendChild(percentLabel);
+
+    container.appendChild(track);
+    container.appendChild(labelsRow);
+
+    if (isCompleted && !document.title.startsWith("✅ ")) {
+        document.title = "✅ " + document.title;
+    }
+
+    return container;
+}
+
+function updateHudProgressBar(progressData, groupColor) {
+    const shadow = getOrCreateShadowRoot();
+    const fill = shadow.getElementById ? shadow.getElementById("ab-progress-fill") : shadow.querySelector("#ab-progress-fill");
+    const stepText = shadow.getElementById ? shadow.getElementById("ab-progress-step-text") : shadow.querySelector("#ab-progress-step-text");
+    const percentText = shadow.getElementById ? shadow.getElementById("ab-progress-percent-text") : shadow.querySelector("#ab-progress-percent-text");
+    const dot = shadow.querySelector ? shadow.querySelector("#ab-control-pill span") : null;
+
+    if (!fill) return;
+
+    const theme = getThemeColors(groupColor || currentGroupColor);
+    const percent = computeProgressPercent(progressData);
+    const isCompleted = percent >= 100 || (progressData.totalSteps > 0 && progressData.currentStep >= progressData.totalSteps);
+
+    fill.style.width = `${percent}%`;
+
+    if (isCompleted) {
+        fill.style.background = "linear-gradient(90deg, #10B981, #34D399)";
+        fill.style.boxShadow = "0 0 10px rgba(16, 185, 129, 0.6)";
+
+        if (dot) {
+            dot.style.background = "#10B981";
+            dot.style.boxShadow = "0 0 10px #10B981";
+            dot.style.animation = "none";
+        }
+
+        if (percentText) {
+            percentText.innerText = "100%";
+            percentText.style.color = "#34D399";
+        }
+
+        if (stepText) {
+            stepText.innerText = "✅ Task Complete (100%)";
+        }
+
+        if (!document.title.startsWith("✅ ")) {
+            document.title = "✅ " + document.title;
+        }
+    } else {
+        fill.style.background = `linear-gradient(90deg, ${theme.borderHex}, #60a5fa)`;
+        fill.style.boxShadow = `0 0 8px ${theme.glowRgba}`;
+
+        if (dot) {
+            dot.style.background = theme.borderHex;
+            dot.style.boxShadow = `0 0 8px ${theme.borderHex}`;
+            dot.style.animation = "agentSocketPulse 1.8s infinite ease-in-out";
+        }
+
+        if (percentText) {
+            percentText.innerText = `${Math.round(percent)}%`;
+            percentText.style.color = theme.tagText || '#38bdf8';
+        }
+
+        if (stepText) {
+            if (progressData.totalSteps > 0) {
+                stepText.innerText = `Step ${progressData.currentStep} of ${progressData.totalSteps}${progressData.stepTitle ? ` • ${progressData.stepTitle}` : ''}`;
+            } else {
+                stepText.innerText = `Task in progress (${Math.round(percent)}%)...`;
+            }
+        }
+    }
 }
 
 // ============================================================================
@@ -392,7 +702,7 @@ function renderActiveGlow(sessionTitle, groupColor) {
 // ============================================================================
 function showInterventionTooltip(x, y) {
     const shadow = getOrCreateShadowRoot();
-    let tooltip = shadow.getElementById ? shadow.getElementById("ab-shield-tooltip") : shadow.querySelector("#ab-shield-tooltip");
+    let tooltip = shadow.querySelector ? shadow.querySelector("#ab-shield-tooltip") : null;
     if (!tooltip) {
         tooltip = document.createElement("div");
         tooltip.id = "ab-shield-tooltip";
@@ -403,22 +713,22 @@ function showInterventionTooltip(x, y) {
     const safeLeft = Math.min(Math.max(x - 130, 16), window.innerWidth - 300);
 
     tooltip.style.cssText = `
-        position: fixed !important;
-        top: ${safeTop}px !important;
-        left: ${safeLeft}px !important;
-        z-index: 2147483647 !important;
-        background: #202020 !important;
-        border: 1px solid #333333 !important;
-        color: #e3e2de !important;
-        padding: 6px 12px !important;
-        border-radius: 5px !important;
-        font-size: 11.5px !important;
-        font-weight: 400 !important;
-        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4) !important;
-        pointer-events: none !important;
-        display: flex !important;
-        align-items: center !important;
-        gap: 6px !important;
+        position: fixed;
+        top: ${safeTop}px;
+        left: ${safeLeft}px;
+        z-index: 2147483647;
+        background: #202020;
+        border: 1px solid #333333;
+        color: #e3e2de;
+        padding: 6px 12px;
+        border-radius: 5px;
+        font-size: 11.5px;
+        font-weight: 400;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+        pointer-events: none;
+        display: flex;
+        align-items: center;
+        gap: 6px;
     `;
     tooltip.innerHTML = `<span>🤖</span> <span>Agent is operating. Click <b>'Take Over'</b> below to interact.</span>`;
 
@@ -433,81 +743,106 @@ function showInterventionTooltip(x, y) {
 // ============================================================================
 function renderTakeoverUI(sessionTitle) {
     const shadow = getOrCreateShadowRoot();
-    clearShadowRootViews(shadow);
-    isShieldActive = false; // Disable keyboard and click shielding
+    clearShadowContent(shadow);
+    isShieldActive = false;
     isTakeoverActive = true;
 
-    // Subtle Notion Red Dashed Border to signify operator takeover
+    // Subtle dashed frame to signify operator takeover
     const lockFrame = document.createElement("div");
     lockFrame.style.cssText = `
-        position: absolute !important;
+        position: fixed !important;
         top: 0 !important;
         left: 0 !important;
         right: 0 !important;
         bottom: 0 !important;
+        width: 100vw !important;
+        height: 100vh !important;
         pointer-events: none !important;
-        border: 2px dashed rgba(235, 87, 87, 0.5) !important;
+        border: 3px dashed rgba(235, 87, 87, 0.7) !important;
         box-sizing: border-box !important;
+        z-index: 2147483645 !important;
     `;
     shadow.appendChild(lockFrame);
 
     const pill = document.createElement("div");
     pill.id = "ab-takeover-pill";
     pill.style.cssText = `
-        position: absolute !important;
+        position: fixed !important;
         bottom: 20px !important;
         left: 50% !important;
-        transform: translate(-50%, 0) !important;
+        transform: translateX(-50%) !important;
         z-index: 2147483647 !important;
         pointer-events: auto !important;
         background: #202020 !important;
         border: 1px solid #4a2729 !important;
-        border-radius: 6px !important;
-        padding: 5px 10px !important;
+        border-radius: 18px !important;
+        padding: 10px 16px 9px 16px !important;
         color: #e3e2de !important;
         display: flex !important;
-        align-items: center !important;
-        gap: 10px !important;
-        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45) !important;
+        flex-direction: column !important;
+        gap: 7px !important;
+        min-width: 360px !important;
+        max-width: 90vw !important;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6) !important;
         animation: agentSocketFadeInUp 0.2s ease-out !important;
         box-sizing: border-box !important;
     `;
 
+    // Row 1: Lock Header & Actions
+    const topRow = document.createElement("div");
+    topRow.style.cssText = `
+        display: flex !important;
+        align-items: center !important;
+        justify-content: space-between !important;
+        width: 100% !important;
+        gap: 12px !important;
+    `;
+
+    const leftGroup = document.createElement("div");
+    leftGroup.style.cssText = `display: flex; align-items: center; gap: 8px;`;
+
     // Red Lock Status Dot
     const dot = document.createElement("span");
     dot.style.cssText = `
-        width: 7px !important;
-        height: 7px !important;
-        background: #ff7369 !important;
-        border-radius: 50% !important;
-        display: inline-block !important;
-        flex-shrink: 0 !important;
+        width: 8px;
+        height: 8px;
+        background: #ff7369;
+        border-radius: 50%;
+        display: inline-block;
+        flex-shrink: 0;
+        box-shadow: 0 0 8px #ff7369;
     `;
 
     const label = document.createElement("div");
     label.style.cssText = `
-        font-weight: 500 !important;
-        color: #ff7369 !important;
-        font-size: 12px !important;
+        font-weight: 500;
+        color: #ff7369;
+        font-size: 12.5px;
     `;
     label.innerHTML = `<span>🔒 Operator Active</span>`;
 
+    leftGroup.appendChild(dot);
+    leftGroup.appendChild(label);
+
     const btnGroup = document.createElement("div");
-    btnGroup.style.cssText = `display: flex !important; align-items: center !important; gap: 6px !important;`;
+    btnGroup.style.cssText = `display: flex; align-items: center; gap: 8px; flex-shrink: 0;`;
 
     // Stop button
     const stopBtn = document.createElement("button");
     stopBtn.className = "ab-btn";
     stopBtn.innerHTML = "<span>⏹</span> <span>Stop</span>";
     stopBtn.style.cssText += `
-        background: #282828 !important;
-        border: 1px solid #333333 !important;
-        color: #9b9b9b !important;
+        background: #282828;
+        border: 1px solid #333333;
+        color: #9b9b9b;
+        font-size: 12px !important;
+        padding: 4px 10px !important;
+        border-radius: 12px !important;
     `;
     stopBtn.onmouseenter = () => { stopBtn.style.background = "#303030"; stopBtn.style.color = "#e3e2de"; };
     stopBtn.onmouseleave = () => { stopBtn.style.background = "#282828"; stopBtn.style.color = "#9b9b9b"; };
     stopBtn.onclick = () => {
-        chrome.runtime.sendMessage({ type: MT.PAGE_STOP || "page_stop" });
+        chrome.runtime.sendMessage({ type: MT.PAGE_STOP });
         removeAllUI();
     };
 
@@ -516,8 +851,11 @@ function renderTakeoverUI(sessionTitle) {
     resumeBtn.className = "ab-btn";
     resumeBtn.innerHTML = "<span>▶</span> <span>Release to Agent</span>";
     resumeBtn.style.cssText += `
-        background: #0f7b6c !important;
-        color: #ffffff !important;
+        background: #0f7b6c;
+        color: #ffffff;
+        font-size: 12px !important;
+        padding: 4px 12px !important;
+        border-radius: 12px !important;
     `;
     resumeBtn.onmouseenter = () => { resumeBtn.style.background = "#0b675a"; };
     resumeBtn.onmouseleave = () => { resumeBtn.style.background = "#0f7b6c"; };
@@ -528,9 +866,18 @@ function renderTakeoverUI(sessionTitle) {
     btnGroup.appendChild(stopBtn);
     btnGroup.appendChild(resumeBtn);
 
-    pill.appendChild(dot);
-    pill.appendChild(label);
-    pill.appendChild(btnGroup);
+    topRow.appendChild(leftGroup);
+    topRow.appendChild(btnGroup);
+
+    // Row 2: Progress Section with Operator Note
+    const progressDataCopy = {
+        ...currentProgress,
+        stepTitle: currentProgress.stepTitle ? `${currentProgress.stepTitle} (Paused)` : "Paused for Operator"
+    };
+    const progressSection = createProgressSection(progressDataCopy, getThemeColors("red"));
+
+    pill.appendChild(topRow);
+    pill.appendChild(progressSection);
 
     shadow.appendChild(pill);
 }
@@ -541,76 +888,75 @@ function renderTakeoverUI(sessionTitle) {
 function renderNotesModal(sessionTitle) {
     const shadow = getOrCreateShadowRoot();
 
-    // Remove any existing modal
     const existingModal = shadow.querySelector ? shadow.querySelector("#ab-notes-overlay") : null;
     if (existingModal) existingModal.remove();
 
     const overlay = document.createElement("div");
     overlay.id = "ab-notes-overlay";
     overlay.style.cssText = `
-        position: absolute !important;
-        top: 0 !important;
-        left: 0 !important;
-        right: 0 !important;
-        bottom: 0 !important;
-        background: rgba(0, 0, 0, 0.6) !important;
-        z-index: 2147483647 !important;
-        pointer-events: auto !important;
-        display: flex !important;
-        align-items: center !important;
-        justify-content: center !important;
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.6);
+        z-index: 2147483647;
+        pointer-events: auto;
+        display: flex;
+        align-items: center;
+        justify-content: center;
     `;
 
     const modal = document.createElement("div");
     modal.id = "ab-notes-card";
     modal.style.cssText = `
-        width: 380px !important;
-        max-width: 90vw !important;
-        background: #202020 !important;
-        border: 1px solid #2f2f2f !important;
-        border-radius: 8px !important;
-        padding: 20px !important;
-        color: #e3e2de !important;
-        box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6) !important;
-        animation: agentSocketModalFadeIn 0.15s ease-out !important;
-        box-sizing: border-box !important;
+        width: 380px;
+        max-width: 90vw;
+        background: #202020;
+        border: 1px solid #2f2f2f;
+        border-radius: 8px;
+        padding: 20px;
+        color: #e3e2de;
+        box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
+        animation: agentSocketModalFadeIn 0.15s ease-out;
+        box-sizing: border-box;
     `;
 
     const title = document.createElement("h3");
     title.innerText = "Handoff Notes to Agent";
     title.style.cssText = `
-        margin: 0 0 6px 0 !important;
-        font-size: 14px !important;
-        font-weight: 600 !important;
-        color: #ffffff !important;
+        margin: 0 0 6px 0;
+        font-size: 14px;
+        font-weight: 600;
+        color: #ffffff;
     `;
 
     const desc = document.createElement("p");
     desc.innerText = "Describe what you completed so the agent can adapt smoothly:";
     desc.style.cssText = `
-        margin: 0 0 12px 0 !important;
-        font-size: 12px !important;
-        color: #9b9b9b !important;
-        line-height: 1.4 !important;
+        margin: 0 0 12px 0;
+        font-size: 12px;
+        color: #9b9b9b;
+        line-height: 1.4;
     `;
 
     const textarea = document.createElement("textarea");
     textarea.placeholder = "e.g. Solved CAPTCHA and navigated to checkout page...";
     textarea.style.cssText = `
-        width: 100% !important;
-        height: 72px !important;
-        box-sizing: border-box !important;
-        background: #191919 !important;
-        color: #e3e2de !important;
-        border: 1px solid #333333 !important;
-        border-radius: 5px !important;
-        padding: 8px 10px !important;
-        font-size: 12px !important;
-        font-family: inherit !important;
-        resize: none !important;
-        margin-bottom: 14px !important;
-        outline: none !important;
-        transition: border-color 0.15s ease, box-shadow 0.15s ease !important;
+        width: 100%;
+        height: 72px;
+        box-sizing: border-box;
+        background: #191919;
+        color: #e3e2de;
+        border: 1px solid #333333;
+        border-radius: 5px;
+        padding: 8px 10px;
+        font-size: 12px;
+        font-family: inherit;
+        resize: none;
+        margin-bottom: 14px;
+        outline: none;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease;
     `;
     textarea.onfocus = () => {
         textarea.style.borderColor = "#2383e2";
@@ -623,18 +969,18 @@ function renderNotesModal(sessionTitle) {
 
     const actionContainer = document.createElement("div");
     actionContainer.style.cssText = `
-        display: flex !important;
-        justify-content: flex-end !important;
-        gap: 8px !important;
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
     `;
 
     const cancelBtn = document.createElement("button");
     cancelBtn.className = "ab-btn";
     cancelBtn.innerText = "Cancel";
     cancelBtn.style.cssText += `
-        background: #282828 !important;
-        border: 1px solid #333333 !important;
-        color: #9b9b9b !important;
+        background: #282828;
+        border: 1px solid #333333;
+        color: #9b9b9b;
     `;
     cancelBtn.onmouseenter = () => { cancelBtn.style.background = "#303030"; cancelBtn.style.color = "#e3e2de"; };
     cancelBtn.onmouseleave = () => { cancelBtn.style.background = "#282828"; cancelBtn.style.color = "#9b9b9b"; };
@@ -646,15 +992,15 @@ function renderNotesModal(sessionTitle) {
     sendBtn.className = "ab-btn";
     sendBtn.innerHTML = "<span>Release & Continue</span>";
     sendBtn.style.cssText += `
-        background: #0f7b6c !important;
-        color: #FFFFFF !important;
+        background: #0f7b6c;
+        color: #FFFFFF;
     `;
     sendBtn.onmouseenter = () => { sendBtn.style.background = "#0b675a"; };
     sendBtn.onmouseleave = () => { sendBtn.style.background = "#0f7b6c"; };
     sendBtn.onclick = () => {
         const text = textarea.value.trim();
         chrome.runtime.sendMessage({
-            type: MT.PAGE_RESUME || "page_resume",
+            type: MT.PAGE_RESUME,
             notes: text || "Control released by operator."
         });
         removeAllUI();

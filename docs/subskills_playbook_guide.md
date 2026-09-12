@@ -25,7 +25,8 @@ server/logs/YYYY-MM-DD/<Session_Title>_<time>_gid<ID>/
 ├── SESSION_DOCUMENT.md     # Auto-generated executive report of run
 ├── session.jsonl           # Exact step-by-step event stream
 ├── sub_skill.md            # Reusable playbook rules and selector hierarchy
-├── input/                  # Target URLs, usernames, CSV inputs
+├── input/                  # Target URLs, CSV inputs, and implementation_plan.md
+│   └── implementation_plan.md # Mandatory task plan with atomic checklist steps & progress bar
 ├── output/                 # Extracted deliverables, CSVs, JSON data
 ├── adhocs/                 # Ad-hoc Python scripts and one-off scrapers
 └── artifacts/              # Screenshots and large offloaded payloads

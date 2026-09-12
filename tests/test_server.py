@@ -6,6 +6,7 @@ import unittest
 from fastapi.testclient import TestClient
 from server.socket_server import app, state
 from server.models import ResponseStatus, ActionType
+from server.session import session_manager
 
 
 class TestServerEndpoints(unittest.TestCase):
@@ -38,6 +39,7 @@ class TestServerEndpoints(unittest.TestCase):
             "id": "cmd-test-1",
             "action_type": "navigate",
             "target_data": "https://example.com",
+            "session_title": "Test Privacy Flag",
             "requires_privacy_check": True
         })
         self.assertEqual(resp.status_code, 200)
@@ -51,6 +53,7 @@ class TestServerEndpoints(unittest.TestCase):
             "id": "cmd-test-2",
             "action_type": "navigate",
             "target_data": "https://mybank.com/login/password",
+            "session_title": "Test Sensitive Keywords",
             "requires_privacy_check": False
         })
         self.assertEqual(resp.status_code, 200)
@@ -66,6 +69,7 @@ class TestServerEndpoints(unittest.TestCase):
             "id": "cmd-test-3",
             "action_type": "execute_js",
             "target_data": "document.title",
+            "session_title": "Test Human Lock",
             "requires_privacy_check": False
         })
         self.assertEqual(resp.status_code, 200)
@@ -92,6 +96,7 @@ class TestServerEndpoints(unittest.TestCase):
             "id": "cmd-test-4",
             "action_type": "navigate",
             "target_data": "https://example.com/checkout",
+            "session_title": "Test Resumed Context",
             "requires_privacy_check": False
         })
         self.assertEqual(resp.status_code, 200)
@@ -121,12 +126,51 @@ class TestServerEndpoints(unittest.TestCase):
             "id": "cmd-test-5",
             "action_type": "navigate",
             "target_data": "https://example.com/public-docs",
+            "session_title": "Test Offline Extension",
             "requires_privacy_check": False
         })
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
         self.assertEqual(data["status"], ResponseStatus.ERROR.value)
         self.assertEqual(data["message"], "Extension is offline.")
+
+    def test_execute_extension_auth_denied(self):
+        import json
+        state.human_in_control = False
+        state.last_intervention_notes = None
+
+        class MockWS:
+            async def send_text(self, text):
+                data = json.loads(text)
+                cmd_id = data.get("id")
+                if cmd_id and cmd_id in state.pending_responses:
+                    fut = state.pending_responses[cmd_id]
+                    if not fut.done():
+                        fut.set_result({
+                            "status": "error",
+                            "error": {
+                                "code": "AUTH_REQUIRED",
+                                "message": "Session authorization was denied by the user."
+                            }
+                        })
+
+        state.extension_ws = MockWS()
+
+        resp = self.client.post("/execute", json={
+            "id": "cmd-test-auth-denied",
+            "action_type": "navigate",
+            "target_data": "https://example.com/test",
+            "session_title": "Denied Session Test",
+            "requires_privacy_check": False
+        })
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["status"], ResponseStatus.ERROR.value)
+        self.assertEqual(data["error"]["code"], "AUTH_REQUIRED")
+
+        # Verify that no session was created in session_manager
+        active_sess = session_manager.get_active_session_by_title("Denied Session Test")
+        self.assertIsNone(active_sess)
 
     def test_history_rest_endpoints(self):
         # 1. Test GET /history

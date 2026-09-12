@@ -461,6 +461,45 @@
     .btn-delete:hover {
       background: #462528;
     }
+
+    .alert-card {
+      background: #2a1f1d;
+      border: 1px solid #54342f;
+      border-radius: 6px;
+      padding: 10px 12px;
+      margin: 10px 0;
+      animation: fadeIn 0.2s ease-in-out;
+    }
+    .alert-title {
+      font-size: 11.5px;
+      font-weight: 600;
+      color: #ff9980;
+      margin-bottom: 4px;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .alert-text {
+      font-size: 11px;
+      color: #d1cfc7;
+      margin-bottom: 5px;
+    }
+    .alert-code-block {
+      background: #18181b;
+      border: 1px solid #383838;
+      border-radius: 4px;
+      padding: 4px 8px;
+      margin: 4px 0 6px 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 11px;
+      color: #4dab9a;
+      user-select: all;
+      overflow-x: auto;
+    }
+    .alert-subtext {
+      font-size: 10.5px;
+      color: var(--text-tertiary);
+    }
   </style>
 </head>
 <body>
@@ -483,6 +522,14 @@
   </div>
 
   <button id="actionBtn" class="btn btn-takeover">Take Over Control</button>
+
+  <!-- Fallback alert banner displayed when no active sockets are detected -->
+  <div id="noServerAlert" class="alert-card" style="display: none;">
+    <div class="alert-title">⚠️ No active AgentSocket server detected</div>
+    <div class="alert-text">Please start your gateway server in the terminal:</div>
+    <div class="alert-code-block"><code>python server/socket_launcher.py start</code></div>
+    <div class="alert-subtext">Then click <b>Scan for Sockets</b> to connect.</div>
+  </div>
 
   <div class="section-title">Agent Sockets</div>
   <div id="agentList">

@@ -12,6 +12,7 @@ from server.models import (
     ResponseStatus,
     ErrorCode,
     AgentActionPayload,
+    ProgressPayload,
     ReleasePayload,
     StandardResponse,
     ServerStatusResponse,
@@ -20,6 +21,7 @@ from server.models import (
     SessionEventModel,
     SessionSummaryModel,
     MonthlyIndexModel,
+    BorrowSubskillPayload,
 )
 
 
@@ -50,31 +52,67 @@ class TestModels(unittest.TestCase):
             target_data="https://example.com",
             requires_privacy_check=False,
             session_title="Test Session",
-            group_color="blue"
         )
         self.assertEqual(payload.id, "cmd-123")
         self.assertEqual(payload.action_type, ActionType.NAVIGATE)
         self.assertEqual(payload.target_data, "https://example.com")
         self.assertEqual(payload.session_title, "Test Session")
-        self.assertEqual(payload.group_color, "blue")
 
     def test_agent_action_payload_from_str(self):
         payload = AgentActionPayload(
             id="cmd-456",
             action_type="execute_js",
-            target_data="document.title"
+            target_data="document.title",
+            session_title="Execute Title Test"
         )
         self.assertEqual(payload.action_type, ActionType.EXECUTE_JS)
         self.assertFalse(payload.requires_privacy_check)
-        self.assertIsNone(payload.session_title)
+        self.assertEqual(payload.session_title, "Execute Title Test")
+
+    def test_agent_action_payload_missing_session_title(self):
+        with self.assertRaises(ValidationError):
+            AgentActionPayload(
+                id="cmd-no-title",
+                action_type="execute_js",
+                target_data="document.title"
+            )
 
     def test_agent_action_payload_invalid_action(self):
         with self.assertRaises(ValidationError):
             AgentActionPayload(
                 id="cmd-789",
                 action_type="invalid_action_type",
-                target_data="bad"
+                target_data="bad",
+                session_title="Invalid Test"
             )
+
+    def test_progress_payload_requires_step_title(self):
+        with self.assertRaises(ValidationError):
+            ProgressPayload(
+                session_title="Test Task",
+                step_current=1,
+                step_total=5
+            )
+        valid = ProgressPayload(
+            session_title="Test Task",
+            step_current=1,
+            step_total=5,
+            step_title="Step 01: Initializing"
+        )
+        self.assertEqual(valid.step_title, "Step 01: Initializing")
+
+    def test_borrow_subskill_payload_requires_session_title(self):
+        with self.assertRaises(ValidationError):
+            BorrowSubskillPayload(name="linkedin-crm-enricher")
+        with self.assertRaises(ValidationError):
+            BorrowSubskillPayload(name="linkedin-crm-enricher", session_title="")
+        valid = BorrowSubskillPayload(
+            name="linkedin-crm-enricher",
+            session_title="Q3 Outreach Campaign"
+        )
+        self.assertEqual(valid.name, "linkedin-crm-enricher")
+        self.assertEqual(valid.session_title, "Q3 Outreach Campaign")
+        self.assertIsNone(valid.tab_group_id)
 
     def test_release_payload(self):
         payload = ReleasePayload(notes="CAPTCHA resolved by human.")
@@ -133,6 +171,8 @@ class TestModels(unittest.TestCase):
             session_title="LinkedIn Lead Gen | 2026-08-21_08:45:10",
             tab_group_id=9821,
             tab_group_name="LinkedIn Lead Gen",
+            agent_name="Hermes Agent",
+            group_color="green",
             status=SessionStatus.COMPLETED,
             session_path="server/logs/2026-08-21/LinkedIn_Lead_Gen_08-45-10_gid9821",
             event_count=10,
@@ -151,6 +191,8 @@ class TestModels(unittest.TestCase):
             session_title="Test Session",
             tab_group_id=1,
             tab_group_name="Test",
+            agent_name="AgentSocket Local",
+            group_color="purple",
             session_path="server/logs/2026-08-21/Test_08-45-10_gid1"
         )
         index = MonthlyIndexModel(months={"2026-08": [summary]})

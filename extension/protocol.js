@@ -33,6 +33,7 @@
         SHOW_GLOW: "show_glow",
         SHOW_TAKEOVER: "show_takeover",
         HIDE_GLOW: "hide_glow",
+        UPDATE_PROGRESS: "update_progress",
 
         // Popup / Auth <-> Background
         GET_STATE: "get_state",

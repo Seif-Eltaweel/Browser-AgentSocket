@@ -209,6 +209,8 @@ class TestSessionManager(unittest.TestCase):
         )
         self.assertIsNotNone(finalized)
         self.assertEqual(finalized.status, SessionStatus.COMPLETED)
+        self.assertTrue(finalized.tab_group_name.startswith("✅"))
+        self.assertTrue(finalized.session_title.startswith("✅"))
         self.assertIsNotNone(finalized.end_time)
         self.assertIsNotNone(finalized.duration_ms)
 
@@ -219,6 +221,7 @@ class TestSessionManager(unittest.TestCase):
         summaries = self.mgr.query_history(query_hint="Complete Flow")
         self.assertEqual(len(summaries), 1)
         self.assertEqual(summaries[0]["status"], SessionStatus.COMPLETED.value)
+        self.assertTrue(summaries[0]["tab_group_name"].startswith("✅"))
 
     def test_inactivity_watchdog(self):
         session = self.mgr.get_or_create_session(
@@ -442,6 +445,82 @@ class TestSessionManager(unittest.TestCase):
         self.assertIn("🌐 NAVIGATE", details["formatted_thread"])
         self.assertIn("https://example.com/search", details["formatted_thread"])
         self.assertIn("✅ SESSION_END", details["formatted_thread"])
+
+    def test_generate_thread_document(self):
+        session = self.mgr.get_or_create_session(
+            tab_group_id=777,
+            tab_group_name="Batch 5 CRM Enrichment",
+            group_color="purple"
+        )
+        self.mgr.log_event(
+            tab_group_id=777,
+            event_type=SessionEventType.NAVIGATE,
+            title="Navigate to Profile",
+            start_time=time.time(),
+            payload={"target_url": "https://example.com/in/john"}
+        )
+        self.mgr.log_event(
+            tab_group_id=777,
+            event_type=SessionEventType.EXECUTE_JS,
+            title="Extract Bio",
+            start_time=time.time(),
+            payload={"result": "Software Engineer"}
+        )
+        self.mgr.finalize_session(777, SessionStatus.COMPLETED)
+
+        thread_path = os.path.join(session.session_dir, "THREAD.md")
+        doc_path = os.path.join(session.session_dir, "SESSION_DOCUMENT.md")
+
+        self.assertTrue(os.path.exists(thread_path), "THREAD.md should be generated in session directory")
+        self.assertTrue(os.path.exists(doc_path), "SESSION_DOCUMENT.md should be generated in session directory")
+
+        with open(thread_path, "r", encoding="utf-8") as f:
+            thread_content = f.read()
+
+        self.assertIn("# 🧵 Session Execution Thread: Batch 5 CRM Enrichment", thread_content)
+        self.assertIn("* **Session ID:**", thread_content)
+        self.assertIn("* **Total Actions:** 2", thread_content)
+        self.assertIn("* **Tab Group ID:** `777` (purple)", thread_content)
+        self.assertIn("## ⏱️ Chronological Execution Log", thread_content)
+        self.assertIn("🌐 NAVIGATE", thread_content)
+        self.assertIn("⚡ EXECUTE_JS", thread_content)
+
+        with open(doc_path, "r", encoding="utf-8") as f:
+            doc_content = f.read()
+        self.assertIn("[`THREAD.md`](THREAD.md)", doc_content)
+
+    def test_inactivity_watchdog_600s_default(self):
+        session = self.mgr.get_or_create_session(tab_group_id=888, tab_group_name="Idle Session")
+        session.last_action_time = time.time() - 350.0  # 350s ago (less than 600s)
+
+        # 350s should NOT trigger timeout when threshold is default 600.0s
+        timed_out = self.mgr.check_inactivity()
+        self.assertEqual(len(timed_out), 0)
+        self.assertEqual(session.status, SessionStatus.ACTIVE)
+
+        # Now age it past 600s
+        session.last_action_time = time.time() - 605.0
+        timed_out = self.mgr.check_inactivity()
+        self.assertEqual(timed_out, [888])
+        self.assertEqual(session.status, SessionStatus.STOPPED)
+        self.assertEqual(session.end_reason, "inactivity_timeout")
+
+    def test_session_deduplication_and_title_reuse(self):
+        # 1. Create first session
+        sess1 = self.mgr.get_or_create_session(tab_group_id=101, tab_group_name="LinkedIn Scraper")
+        sess1_dir = sess1.session_dir
+
+        # 2. Re-request with same title but new Chrome tab_group_id (e.g. 102)
+        sess2 = self.mgr.get_or_create_session(tab_group_id=102, tab_group_name="LinkedIn Scraper")
+
+        # Must reuse the same session directory and object without creating duplicate folders
+        self.assertEqual(sess1_dir, sess2.session_dir)
+        self.assertEqual(sess2.tab_group_id, 102)
+        self.assertIn(102, self.mgr.active_sessions)
+
+        # 3. Request with "✅ LinkedIn Scraper" (after completion rename)
+        sess3 = self.mgr.get_or_create_session(tab_group_id=103, tab_group_name="✅ LinkedIn Scraper")
+        self.assertEqual(sess1_dir, sess3.session_dir)
 
 
 if __name__ == "__main__":

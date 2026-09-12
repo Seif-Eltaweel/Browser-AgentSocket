@@ -1,19 +1,19 @@
 """
 AgentSocket - Smart Launcher & Subsystem Manager
-Handles on-demand gateway boot, extension health checks, process lifecycle, and Chrome auto-launch.
+Handles on-demand gateway boot, extension health checks, process lifecycle, Chrome auto-launch, and declarative CLI dispatch.
 """
 
+from __future__ import annotations
 import argparse
 import json
 import os
 import platform
 import shutil
-import signal
 import subprocess
 import sys
 import time
 import uuid
-from typing import Optional
+from typing import Any, Callable
 import requests
 
 # Ensure UTF-8 output encoding for cross-platform emojis and unicode tree symbols
@@ -28,16 +28,28 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-from server.models import (
-    ActionType,
-    ResponseStatus,
-    ErrorCode
+from server.logger import logger
+from server.models import ActionType, ErrorCode, ResponseStatus
+from server.session import (
+    format_session_thread,
+    print_history_table,
+    print_session_logs,
+    print_subskill_details,
+    print_subskills_table,
+    session_manager,
 )
-from server.session_manager import session_manager
 
 EXTENSION_DIR = os.path.join(REPO_ROOT, "extension")
 PID_FILE_PATH = os.path.join(REPO_ROOT, ".socket_server.pid")
+PORT_FILE_PATH = os.path.join(REPO_ROOT, ".socket_server.port")
 DEFAULT_SERVER_URL = "http://127.0.0.1:8000"
+
+# Named platform-specific subprocess creation flags
+CREATE_NO_WINDOW = 0x08000000
+DETACHED_PROCESS = 0x00000008
+WIN_CREATE_FLAGS = (
+    subprocess.CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW | DETACHED_PROCESS
+) if platform.system() == "Windows" else 0
 
 
 def is_pid_running(pid: int) -> bool:
@@ -48,8 +60,8 @@ def is_pid_running(pid: int) -> bool:
         try:
             out = subprocess.check_output(
                 ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
-                creationflags=0x08000000 if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
-                text=True
+                creationflags=CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+                text=True,
             )
             return str(pid) in out
         except Exception:
@@ -62,7 +74,7 @@ def is_pid_running(pid: int) -> bool:
             return False
 
 
-def clean_stale_pid_file():
+def clean_stale_pid_file() -> None:
     """Removes PID file if the corresponding process is not running."""
     if os.path.exists(PID_FILE_PATH):
         try:
@@ -77,7 +89,72 @@ def clean_stale_pid_file():
                 pass
 
 
-def find_chrome_path() -> Optional[str]:
+def clean_stale_port_file() -> None:
+    """Removes port file if the corresponding server process is not running."""
+    if os.path.exists(PORT_FILE_PATH):
+        try:
+            if os.path.exists(PID_FILE_PATH):
+                with open(PID_FILE_PATH, "r", encoding="utf-8") as f:
+                    pid = int(f.read().strip())
+                if not is_pid_running(pid):
+                    os.remove(PORT_FILE_PATH)
+            else:
+                os.remove(PORT_FILE_PATH)
+        except Exception:
+            try:
+                os.remove(PORT_FILE_PATH)
+            except Exception:
+                pass
+
+
+def resolve_server_url(default_port: int = 8000) -> str:
+    """
+    Resolves the active AgentSocket server URL using a priority waterfall:
+    1. Environment variable: AGENTSOCKET_URL or AGENTSOCKET_PORT
+    2. File discovery: .socket_server.port (validated against PID / status)
+    3. Multi-port probe: [8000, 8001, 8002, 8003, 8080, 8500, 9000]
+    4. Fallback to default
+    """
+    # 1. Environment variables
+    env_url = os.environ.get("AGENTSOCKET_URL")
+    if env_url:
+        return env_url.rstrip("/")
+
+    env_port = os.environ.get("AGENTSOCKET_PORT")
+    if env_port:
+        try:
+            p = int(env_port)
+            return f"http://127.0.0.1:{p}"
+        except ValueError:
+            pass
+
+    # 2. File discovery (.socket_server.port)
+    if os.path.exists(PORT_FILE_PATH):
+        try:
+            with open(PORT_FILE_PATH, "r", encoding="utf-8") as f:
+                port_val = int(f.read().strip())
+            candidate_url = f"http://127.0.0.1:{port_val}"
+            # Trust port file unless a stale dead PID is confirmed
+            if not os.path.exists(PID_FILE_PATH) or is_process_running(PID_FILE_PATH) or is_server_running(candidate_url):
+                return candidate_url
+            else:
+                clean_stale_port_file()
+        except Exception:
+            pass
+
+    # 3. Multi-port probing
+    candidate_ports = [8000, 8001, 8002, 8003, 8080, 8500, 9000]
+    for p in candidate_ports:
+        candidate_url = f"http://127.0.0.1:{p}"
+        if is_server_running(candidate_url):
+            return candidate_url
+
+    # 4. Fallback
+    return f"http://127.0.0.1:{default_port}"
+
+
+
+def find_chrome_path() -> str | None:
     """Detects the Google Chrome or Chromium executable across Windows, macOS, and Linux."""
     system = platform.system()
 
@@ -137,7 +214,7 @@ def is_server_running(server_url: str = DEFAULT_SERVER_URL) -> bool:
         return False
 
 
-def get_gateway_status(server_url: str = DEFAULT_SERVER_URL) -> dict:
+def get_gateway_status(server_url: str = DEFAULT_SERVER_URL) -> dict[str, Any]:
     """Fetches the current status payload from the gateway server."""
     clean_stale_pid_file()
     try:
@@ -152,42 +229,39 @@ def get_gateway_status(server_url: str = DEFAULT_SERVER_URL) -> dict:
 def ensure_server_running(port: int = 8000, timeout: float = 8.0) -> bool:
     """Ensures the FastAPI gateway server is running, booting it in the background if needed."""
     clean_stale_pid_file()
+    clean_stale_port_file()
     server_url = f"http://127.0.0.1:{port}"
     if is_server_running(server_url):
         return True
 
-    print(f"[AgentSocket] Gateway server not detected on port {port}. Spawning background socket process...")
+    logger.info(f"Gateway server not detected on port {port}. Spawning background socket process...")
     cmd = [sys.executable, "-m", "uvicorn", "server.socket_server:app", "--port", str(port), "--host", "127.0.0.1"]
-
-    creation_flags = 0
-    if platform.system() == "Windows":
-        creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP | 0x08000000 | 0x00000008
 
     proc = subprocess.Popen(
         cmd,
         cwd=REPO_ROOT,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        creationflags=creation_flags,
+        creationflags=WIN_CREATE_FLAGS,
         start_new_session=(platform.system() != "Windows"),
     )
 
-    # Save PID
     try:
         with open(PID_FILE_PATH, "w", encoding="utf-8") as f:
             f.write(str(proc.pid))
+        with open(PORT_FILE_PATH, "w", encoding="utf-8") as f:
+            f.write(str(port))
     except Exception as e:
-        print(f"[AgentSocket] Warning: Could not write PID file: {e}")
+        logger.warning(f"Could not write PID/port file: {e}")
 
-    # Wait for server to become live
     start_time = time.time()
     while time.time() - start_time < timeout:
         if is_server_running(server_url):
-            print(f"[AgentSocket] Gateway server is live on {server_url} (PID: {proc.pid}).")
+            logger.info(f"Gateway server is live on {server_url} (PID: {proc.pid}).")
             return True
         time.sleep(0.3)
 
-    print(f"[AgentSocket] Error: Gateway server failed to start within {timeout}s.")
+    logger.error(f"Gateway server failed to start within {timeout}s.")
     return False
 
 
@@ -195,11 +269,11 @@ def launch_chrome_with_extension(extension_dir: str = EXTENSION_DIR, timeout: fl
     """Launches Chrome with the AgentSocket unpacked extension loaded."""
     chrome_bin = find_chrome_path()
     if not chrome_bin:
-        print("[AgentSocket] Error: Could not locate Chrome or Chromium on this system.")
+        logger.error("Could not locate Chrome or Chromium on this system.")
         return False
 
     abs_ext_dir = os.path.abspath(extension_dir)
-    print(f"[AgentSocket] Launching Chrome ({chrome_bin}) with extension: {abs_ext_dir}")
+    logger.info(f"Launching Chrome ({chrome_bin}) with extension: {abs_ext_dir}")
 
     chrome_cmd = [
         chrome_bin,
@@ -209,32 +283,27 @@ def launch_chrome_with_extension(extension_dir: str = EXTENSION_DIR, timeout: fl
         "--no-default-browser-check",
     ]
 
-    creation_flags = 0
-    if platform.system() == "Windows":
-        creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP | 0x08000000 | 0x00000008
-
     subprocess.Popen(
         chrome_cmd,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        creationflags=creation_flags,
+        creationflags=WIN_CREATE_FLAGS,
         start_new_session=(platform.system() != "Windows"),
     )
 
-    # Poll server to verify WebSocket connection
     start_time = time.time()
     while time.time() - start_time < timeout:
         status = get_gateway_status()
         if status.get("extension_connected"):
-            print("[AgentSocket] Chrome Extension plugged in successfully to gateway socket.")
+            logger.info("Chrome Extension plugged in successfully to gateway socket.")
             return True
         time.sleep(0.5)
 
-    print("[AgentSocket] Notice: Chrome launched. Awaiting extension WebSocket handshake.")
+    logger.info("Chrome launched. Awaiting extension WebSocket handshake.")
     return True
 
 
-def ensure_ready(server_url: str = DEFAULT_SERVER_URL, auto_launch_chrome: bool = True) -> dict:
+def ensure_ready(server_url: str = DEFAULT_SERVER_URL, auto_launch_chrome: bool = True) -> dict[str, Any]:
     """
     Guarantees the subsystem is fully initialized:
     1. Boots FastAPI server if inactive.
@@ -245,12 +314,12 @@ def ensure_ready(server_url: str = DEFAULT_SERVER_URL, auto_launch_chrome: bool 
             return {
                 "status": ResponseStatus.ERROR.value,
                 "message": "Failed to start FastAPI gateway server.",
-                "error": {"code": ErrorCode.INTERNAL_ERROR.value, "message": "Server process did not become healthy."}
+                "error": {"code": ErrorCode.INTERNAL_ERROR.value, "message": "Server process did not become healthy."},
             }
 
     status = get_gateway_status(server_url)
     if not status.get("extension_connected") and auto_launch_chrome:
-        print("[AgentSocket] Extension not connected. Triggering auto-launch for Chrome...")
+        logger.info("Extension not connected. Triggering auto-launch for Chrome...")
         launch_chrome_with_extension()
         status = get_gateway_status(server_url)
 
@@ -260,11 +329,10 @@ def ensure_ready(server_url: str = DEFAULT_SERVER_URL, auto_launch_chrome: bool 
 def execute_action(
     action_type: str,
     target_data: str,
+    session_title: str,
     requires_privacy_check: bool = False,
-    session_title: Optional[str] = "AgentSocket Task",
-    group_color: Optional[str] = "purple",
     server_url: str = DEFAULT_SERVER_URL,
-) -> dict:
+) -> dict[str, Any]:
     """Ensures environment is ready and sends action payload to /execute."""
     ensure_ready(server_url)
     payload = {
@@ -273,7 +341,6 @@ def execute_action(
         "target_data": target_data,
         "requires_privacy_check": requires_privacy_check,
         "session_title": session_title,
-        "group_color": group_color,
     }
     try:
         resp = requests.post(f"{server_url}/execute", json=payload, timeout=35.0)
@@ -282,11 +349,37 @@ def execute_action(
         return {
             "status": ResponseStatus.ERROR.value,
             "message": f"Execution request failed: {e}",
-            "error": {"code": ErrorCode.INTERNAL_ERROR.value, "message": str(e)}
+            "error": {"code": ErrorCode.INTERNAL_ERROR.value, "message": str(e)},
         }
 
 
-def release_takeover(notes: str = "", server_url: str = DEFAULT_SERVER_URL) -> dict:
+def send_progress(
+    session_title: str,
+    step_current: int,
+    step_total: int,
+    step_title: str,
+    server_url: str | None = None,
+) -> dict[str, Any]:
+    """Dispatches a progress update to the gateway server."""
+    url = server_url or resolve_server_url()
+    payload = {
+        "session_title": session_title,
+        "step_current": step_current,
+        "step_total": step_total,
+        "step_title": step_title,
+    }
+    try:
+        resp = requests.post(f"{url}/progress", json=payload, timeout=5.0)
+        return resp.json()
+    except Exception as e:
+        return {
+            "status": "warning",
+            "message": f"Could not dispatch progress to {url}: {e}",
+            "progress_percent": int((step_current / max(1, step_total)) * 100),
+        }
+
+
+def release_takeover(notes: str = "", server_url: str = DEFAULT_SERVER_URL) -> dict[str, Any]:
     """Releases human intervention lockout."""
     ensure_ready(server_url, auto_launch_chrome=False)
     try:
@@ -296,11 +389,11 @@ def release_takeover(notes: str = "", server_url: str = DEFAULT_SERVER_URL) -> d
         return {
             "status": ResponseStatus.ERROR.value,
             "message": f"Human release request failed: {e}",
-            "error": {"code": ErrorCode.INTERNAL_ERROR.value, "message": str(e)}
+            "error": {"code": ErrorCode.INTERNAL_ERROR.value, "message": str(e)},
         }
 
 
-def stop_tasks(server_url: str = DEFAULT_SERVER_URL) -> dict:
+def stop_tasks(server_url: str = DEFAULT_SERVER_URL) -> dict[str, Any]:
     """Stops active tasks and resets state."""
     ensure_ready(server_url, auto_launch_chrome=False)
     try:
@@ -310,7 +403,7 @@ def stop_tasks(server_url: str = DEFAULT_SERVER_URL) -> dict:
         return {
             "status": ResponseStatus.ERROR.value,
             "message": f"Stop request failed: {e}",
-            "error": {"code": ErrorCode.INTERNAL_ERROR.value, "message": str(e)}
+            "error": {"code": ErrorCode.INTERNAL_ERROR.value, "message": str(e)},
         }
 
 
@@ -330,27 +423,32 @@ def kill_server() -> bool:
                 subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
             else:
                 os.kill(pid, 9)
-            print(f"[AgentSocket] Terminated server PID {pid}.")
+            logger.info(f"Terminated server PID {pid}.")
         except Exception as e:
-            print(f"[AgentSocket] Error killing PID {pid}: {e}")
+            logger.error(f"Error killing PID {pid}: {e}")
 
     if os.path.exists(PID_FILE_PATH):
         try:
             os.remove(PID_FILE_PATH)
         except Exception:
             pass
+    if os.path.exists(PORT_FILE_PATH):
+        try:
+            os.remove(PORT_FILE_PATH)
+        except Exception:
+            pass
     return True
 
 
 # ============================================================================
-# Session History & Introspection Helpers (Spec 11)
+# Session History & Introspection Helpers
 # ============================================================================
 def query_history(
     query_hint: str = "",
-    month: Optional[str] = None,
+    month: str | None = None,
     limit: int = 10,
     server_url: str = DEFAULT_SERVER_URL,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Queries past sessions from server or directly via SessionManager."""
     if is_server_running(server_url):
         try:
@@ -365,7 +463,7 @@ def query_history(
     return session_manager.query_history(query_hint=query_hint, month=month, limit=limit)
 
 
-def get_session_details(session_path: str, server_url: str = DEFAULT_SERVER_URL) -> dict:
+def get_session_details(session_path: str, server_url: str = DEFAULT_SERVER_URL) -> dict[str, Any]:
     """Retrieves full chronological events thread for a session."""
     if is_server_running(server_url):
         try:
@@ -377,7 +475,7 @@ def get_session_details(session_path: str, server_url: str = DEFAULT_SERVER_URL)
     return session_manager.get_session_details(session_path=session_path)
 
 
-def get_session_artifact(session_path: str, artifact_name: str, server_url: str = DEFAULT_SERVER_URL) -> dict | str:
+def get_session_artifact(session_path: str, artifact_name: str, server_url: str = DEFAULT_SERVER_URL) -> dict[str, Any] | str:
     """Retrieves an offloaded payload or artifact path."""
     if is_server_running(server_url):
         try:
@@ -402,19 +500,32 @@ def get_session_document(session_path: str, server_url: str = DEFAULT_SERVER_URL
     return session_manager.generate_session_document(session_dir_or_path=session_path)
 
 
-def export_all_timeline(month: Optional[str] = None, output_path: Optional[str] = None) -> str:
+def get_session_thread(session_path: str, server_url: str = DEFAULT_SERVER_URL) -> str:
+    """Generates and retrieves the dedicated standalone thread markdown (THREAD.md)."""
+    if is_server_running(server_url):
+        try:
+            resp = requests.get(f"{server_url}/session/thread", params={"path": session_path}, timeout=5.0)
+            if resp.status_code == 200:
+                data = resp.json()
+                return data.get("thread_markdown", "")
+        except Exception:
+            pass
+    return session_manager.generate_thread_document(session_dir_or_path=session_path)
+
+
+def export_all_timeline(month: str | None = None, output_path: str | None = None) -> str:
     """Exports master history report to Markdown."""
     return session_manager.export_all_to_markdown(month=month, output_path=output_path)
 
 
 # ============================================================================
-# Subskills & Borrowing Engine Helpers (Spec 13)
+# Subskills & Borrowing Engine Helpers
 # ============================================================================
 def list_subskills(
     query: str = "",
-    tags: Optional[str] = None,
+    tags: str | None = None,
     server_url: str = DEFAULT_SERVER_URL,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Lists registered subskills from gateway server or session_manager."""
     if is_server_running(server_url):
         try:
@@ -432,7 +543,7 @@ def list_subskills(
     return session_manager.list_subskills(query=query, tags=tag_list)
 
 
-def get_subskill(name: str, server_url: str = DEFAULT_SERVER_URL) -> Optional[dict]:
+def get_subskill(name: str, server_url: str = DEFAULT_SERVER_URL) -> dict[str, Any] | None:
     """Retrieves detailed subskill info including playbook markdown."""
     if is_server_running(server_url):
         try:
@@ -448,11 +559,11 @@ def get_subskill(name: str, server_url: str = DEFAULT_SERVER_URL) -> Optional[di
 
 def borrow_subskill(
     name: str,
-    session_title: Optional[str] = "AgentSocket Task",
-    tab_group_id: Optional[int] = None,
-    input_file_path: Optional[str] = None,
+    session_title: str,
+    tab_group_id: int | None = None,
+    input_file_path: str | None = None,
     server_url: str = DEFAULT_SERVER_URL,
-) -> dict:
+) -> dict[str, Any]:
     """Borrows a subskill into an active session workspace."""
     if is_server_running(server_url):
         try:
@@ -478,13 +589,13 @@ def borrow_subskill(
 def register_subskill(
     session_path: str,
     name: str,
-    display_title: Optional[str] = None,
-    description: Optional[str] = None,
-    tags: Optional[list[str]] = None,
-    adhoc_tools: Optional[list[str]] = None,
-    subskill_markdown: Optional[str] = None,
+    display_title: str | None = None,
+    description: str | None = None,
+    tags: list[str] | None = None,
+    adhoc_tools: list[str] | None = None,
+    subskill_markdown: str | None = None,
     server_url: str = DEFAULT_SERVER_URL,
-) -> dict:
+) -> dict[str, Any]:
     """Registers or updates a session as a reusable subskill."""
     if is_server_running(server_url):
         try:
@@ -513,173 +624,346 @@ def register_subskill(
     )
 
 
-def print_history_table(summaries: list[dict]):
-    """Formats session summaries into a clean ASCII table."""
-    if not summaries:
-        print("\n[History] No recorded browser sessions found.\n")
-        return
-
-    print("\n" + "=" * 110)
-    print(f"{'SESSION ID':<30} | {'TAB GROUP':<25} | {'STATUS':<10} | {'DUR(s)':<8} | {'ACTS':<5} | {'TAKOVR':<6} | {'PATH'}")
-    print("=" * 110)
-    for s in summaries:
-        sid = s.get("session_id", "")[:28]
-        title = s.get("tab_group_name", "")[:23]
-        status = s.get("status", "")[:9]
-        dur_ms = s.get("duration_ms")
-        dur_str = f"{dur_ms/1000.0:.1f}s" if dur_ms else "N/A"
-        acts = str(s.get("action_count", 0))
-        tak = str(s.get("takeover_count", 0))
-        spath = s.get("session_path", "")
-        print(f"{sid:<30} | {title:<25} | {status:<10} | {dur_str:<8} | {acts:<5} | {tak:<6} | {spath}")
-    print("=" * 110 + "\n")
+# ============================================================================
+# Central Adhocs Vault & Resolution API Helpers (Spec 18)
+# ============================================================================
+def list_adhocs(server_url: str = DEFAULT_SERVER_URL) -> list[dict[str, Any]]:
+    """Lists universal shared adhoc tools from the central vault."""
+    if is_server_running(server_url):
+        try:
+            resp = requests.get(f"{server_url}/adhocs", timeout=5.0)
+            if resp.status_code == 200:
+                return resp.json()
+        except Exception:
+            pass
+    return session_manager.list_adhocs()
 
 
-def print_subskills_table(subskills: list[dict]):
-    """Formats subskills into a clean ASCII table."""
-    if not subskills:
-        print("\n[Subskills] No registered subskills found.\n")
-        return
-
-    print("\n" + "=" * 115)
-    print(f"{'SUBSKILL NAME':<26} | {'DISPLAY TITLE':<30} | {'BORROWED':<9} | {'TAGS':<20} | {'LATEST SESSION'}")
-    print("=" * 115)
-    for s in subskills:
-        name = s.get("name", "")[:25]
-        title = s.get("display_title", "")[:28]
-        borrowed = str(s.get("times_borrowed", 0))
-        tags_str = ", ".join(s.get("tags", []))[:18]
-        path = s.get("latest_session_path", "")
-        print(f"{name:<26} | {title:<30} | {borrowed:<9} | {tags_str:<20} | {path}")
-    print("=" * 115 + "\n")
-
-
-def print_subskill_details(details: dict):
-    """Displays formatted details of a single subskill."""
-    if not details:
-        print("\n[Subskills] Subskill not found.\n")
-        return
-
-    name = details.get("name", "")
-    title = details.get("display_title", "")
-    desc = details.get("description", "")
-    tags = ", ".join(details.get("tags", []))
-    borrowed = details.get("times_borrowed", 0)
-    sess_path = details.get("latest_session_path", "")
-    tools = details.get("available_adhoc_tools", [])
-    playbook = details.get("playbook_markdown", "")
-
-    print("\n" + "=" * 80)
-    print(f"📦 Subskill: {title} (`{name}`)")
-    print("=" * 80)
-    print(f"• Description   : {desc}")
-    print(f"• Tags          : {tags}")
-    print(f"• Times Borrowed: {borrowed}")
-    print(f"• Source Session: {sess_path}")
-    print(f"• Adhoc Tools   : {', '.join(tools) if tools else 'None'}")
-    print("-" * 80)
-    print("📖 Playbook Contract (sub_skill.md):")
-    print(playbook if playbook else "*No playbook markdown content.*")
-    print("=" * 80 + "\n")
+def promote_adhoc(
+    session_path: str,
+    tool_name: str,
+    target: str = "universal",
+    subskill_name: str | None = None,
+    server_url: str = DEFAULT_SERVER_URL,
+) -> dict[str, Any]:
+    """Promotes a session adhoc tool to universal or subskill vault."""
+    if is_server_running(server_url):
+        try:
+            payload = {
+                "session_path": session_path,
+                "tool_name": tool_name,
+                "target": target,
+                "subskill_name": subskill_name,
+            }
+            resp = requests.post(f"{server_url}/adhocs/promote", json=payload, timeout=8.0)
+            if resp.status_code == 200:
+                return resp.json()
+        except Exception:
+            pass
+    return session_manager.promote_adhoc(
+        session_path=session_path,
+        tool_name=tool_name,
+        target=target,
+        subskill_name=subskill_name,
+    )
 
 
-def print_session_logs(details: dict):
-    """Formats session.jsonl events into a tree-structured chronological thread."""
-    if details.get("status") == "error":
-        print(f"\n[Logs Error] {details.get('message')}\n")
-        return
+def resolve_adhoc(
+    tool_name: str,
+    session_path: str | None = None,
+    server_url: str = DEFAULT_SERVER_URL,
+) -> dict[str, Any]:
+    """Resolves an adhoc tool through the 3-tier hierarchical resolution pipeline."""
+    if is_server_running(server_url):
+        try:
+            params = {"tool_name": tool_name}
+            if session_path:
+                params["session_path"] = session_path
+            resp = requests.get(f"{server_url}/adhocs/resolve", params=params, timeout=5.0)
+            if resp.status_code == 200:
+                return resp.json()
+        except Exception:
+            pass
+    return session_manager.resolve_adhoc(tool_name=tool_name, session_dir_or_path=session_path)
 
-    formatted_thread = details.get("formatted_thread")
-    if not formatted_thread:
-        formatted_thread = session_manager.format_session_thread(details)
 
-    try:
-        print("\n" + formatted_thread + "\n")
-    except UnicodeEncodeError:
-        enc = getattr(sys.stdout, "encoding", None) or "utf-8"
-        safe_str = formatted_thread.encode(enc, errors="replace").decode(enc)
-        print("\n" + safe_str + "\n")
+def run_adhoc(
+    tool_name: str,
+    session_path: str | None = None,
+    args: list[str] | None = None,
+    server_url: str = DEFAULT_SERVER_URL,
+) -> dict[str, Any]:
+    """Runs an adhoc script via the 3-tier resolution pipeline."""
+    if is_server_running(server_url):
+        try:
+            payload = {
+                "tool_name": tool_name,
+                "session_path": session_path,
+                "args": args or [],
+            }
+            resp = requests.post(f"{server_url}/adhocs/run", json=payload, timeout=65.0)
+            if resp.status_code == 200:
+                return resp.json()
+        except Exception:
+            pass
+    return session_manager.run_adhoc(
+        tool_name=tool_name,
+        session_dir_or_path=session_path,
+        args=args,
+    )
 
 
-def main():
+
+# ============================================================================
+# Declarative CLI Command Handlers
+# ============================================================================
+def cmd_status(args: argparse.Namespace) -> None:
+    status = get_gateway_status()
+    print(json.dumps(status, indent=2))
+
+
+def cmd_plug(args: argparse.Namespace) -> None:
+    status = ensure_ready()
+    print(json.dumps(status, indent=2))
+
+
+def cmd_navigate(args: argparse.Namespace) -> None:
+    res = execute_action("navigate", args.url, requires_privacy_check=args.privacy, session_title=args.title)
+    print(json.dumps(res, indent=2))
+
+
+def cmd_eval(args: argparse.Namespace) -> None:
+    res = execute_action("execute_js", args.code, requires_privacy_check=args.privacy, session_title=args.title)
+    print(json.dumps(res, indent=2))
+
+
+def cmd_release(args: argparse.Namespace) -> None:
+    res = release_takeover(args.notes)
+    print(json.dumps(res, indent=2))
+
+
+def cmd_stop(args: argparse.Namespace) -> None:
+    res = stop_tasks()
+    print(json.dumps(res, indent=2))
+
+
+def cmd_kill(args: argparse.Namespace) -> None:
+    kill_server()
+
+
+def cmd_history(args: argparse.Namespace) -> None:
+    results = query_history(query_hint=args.query, month=args.month, limit=args.limit)
+    if getattr(args, "json", False):
+        print(json.dumps(results, indent=2))
+    else:
+        print_history_table(results)
+
+
+def cmd_logs(args: argparse.Namespace) -> None:
+    details = get_session_details(session_path=args.path)
+    if getattr(args, "json", False):
+        print(json.dumps(details, indent=2))
+    else:
+        print_session_logs(details)
+
+
+def cmd_doc(args: argparse.Namespace) -> None:
+    doc_text = get_session_document(session_path=args.path)
+    if getattr(args, "json", False):
+        print(json.dumps({"session_path": args.path, "document_markdown": doc_text}, indent=2))
+    else:
+        print("\n" + doc_text + "\n")
+
+
+def cmd_thread(args: argparse.Namespace) -> None:
+    thread_text = get_session_thread(session_path=args.path)
+    if getattr(args, "json", False):
+        print(json.dumps({"session_path": args.path, "thread_markdown": thread_text}, indent=2))
+    else:
+        print("\n" + thread_text + "\n")
+
+
+def cmd_export_all(args: argparse.Namespace) -> None:
+    out_path = args.out
+    md = export_all_timeline(month=args.month, output_path=out_path)
+    print(f"[AgentSocket] Exported master session history timeline ({len(md)} chars) to: {out_path}")
+
+
+def cmd_subskills(args: argparse.Namespace) -> None:
+    if not args.subskills_command or args.subskills_command == "list":
+        results = list_subskills(query=getattr(args, "query", ""), tags=getattr(args, "tags", None))
+        if getattr(args, "json", False):
+            print(json.dumps(results, indent=2))
+        else:
+            print_subskills_table(results)
+
+    elif args.subskills_command == "show":
+        details = get_subskill(name=args.name)
+        if getattr(args, "json", False):
+            print(json.dumps(details, indent=2))
+        else:
+            print_subskill_details(details)
+
+    elif args.subskills_command == "borrow":
+        res = borrow_subskill(
+            name=args.name,
+            session_title=args.title,
+            tab_group_id=args.gid,
+            input_file_path=args.input,
+        )
+        print(json.dumps(res, indent=2))
+
+    elif args.subskills_command == "register":
+        tag_list = [t.strip() for t in args.tags.split(",") if t.strip()] if args.tags else None
+        tool_list = [t.strip() for t in args.tools.split(",") if t.strip()] if args.tools else None
+        res = register_subskill(
+            session_path=args.session,
+            name=args.name,
+            display_title=args.title,
+            description=args.description,
+            tags=tag_list,
+            adhoc_tools=tool_list,
+        )
+        print(json.dumps(res, indent=2))
+
+
+def cmd_progress(args: argparse.Namespace) -> None:
+    res = send_progress(
+        session_title=args.title,
+        step_current=args.current,
+        step_total=args.total,
+        step_title=args.step_title,
+    )
+    print(json.dumps(res, indent=2))
+
+
+def cmd_adhocs(args: argparse.Namespace) -> None:
+    action = getattr(args, "adhocs_command", "list") or "list"
+    if action == "list":
+        results = list_adhocs()
+        if getattr(args, "json", False):
+            print(json.dumps(results, indent=2))
+        else:
+            print("\n" + "=" * 90)
+            print(f"{'TOOL NAME':<25} | {'SIZE (BYTES)':<12} | {'PURPOSE / DOCSTRING'}")
+            print("=" * 90)
+            for t in results:
+                print(f"{t.get('name', ''):<25} | {str(t.get('size', '-')):<12} | {t.get('doc', '')[:45]}")
+            print("=" * 90 + "\n")
+
+    elif action == "promote":
+        res = promote_adhoc(
+            session_path=args.session,
+            tool_name=args.tool,
+            target=args.target,
+            subskill_name=args.subskill,
+        )
+        print(json.dumps(res, indent=2))
+
+    elif action == "resolve":
+        res = resolve_adhoc(tool_name=args.tool, session_path=args.session)
+        print(json.dumps(res, indent=2))
+
+    elif action == "run":
+        res = run_adhoc(
+            tool_name=args.tool,
+            session_path=args.session,
+            args=args.args,
+        )
+        print(json.dumps(res, indent=2))
+
+
+COMMAND_DISPATCH: dict[str, Callable[[argparse.Namespace], None]] = {
+    "status": cmd_status,
+    "plug": cmd_plug,
+    "start": cmd_plug,
+    "navigate": cmd_navigate,
+    "eval": cmd_eval,
+    "progress": cmd_progress,
+    "release": cmd_release,
+    "stop": cmd_stop,
+    "kill": cmd_kill,
+    "history": cmd_history,
+    "logs": cmd_logs,
+    "doc": cmd_doc,
+    "thread": cmd_thread,
+    "export-all": cmd_export_all,
+    "subskills": cmd_subskills,
+    "adhocs": cmd_adhocs,
+}
+
+
+def build_cli_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AgentSocket Smart Launcher & CLI")
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
 
-    # status
     subparsers.add_parser("status", help="Get gateway & extension socket status")
-
-    # plug / start
     subparsers.add_parser("plug", help="Plug in: Ensure gateway & browser are booted and ready")
     subparsers.add_parser("start", help="Alias for 'plug'")
 
-    # navigate
     nav_parser = subparsers.add_parser("navigate", help="Navigate browser tab to URL")
     nav_parser.add_argument("url", help="Target URL to navigate to")
     nav_parser.add_argument("--privacy", action="store_true", help="Force privacy check gate")
     nav_parser.add_argument("--title", default="AgentSocket Task", help="Session title")
 
-    # eval
+    prog_parser = subparsers.add_parser("progress", help="Broadcast progress update to active session HUD")
+    prog_parser.add_argument("--title", default="AgentSocket Task", help="Session title")
+    prog_parser.add_argument("--current", type=int, required=True, help="Current step number")
+    prog_parser.add_argument("--total", type=int, required=True, help="Total step count")
+    prog_parser.add_argument("--step-title", default=None, help="Step description or label")
+
     eval_parser = subparsers.add_parser("eval", help="Execute JavaScript code in active tab")
     eval_parser.add_argument("code", help="JavaScript code string")
     eval_parser.add_argument("--privacy", action="store_true", help="Force privacy check gate")
     eval_parser.add_argument("--title", default="AgentSocket Task", help="Session title")
 
-    # release
     rel_parser = subparsers.add_parser("release", help="Release human intervention lockout")
     rel_parser.add_argument("--notes", default="", help="Handoff notes for the agent")
 
-    # stop
     subparsers.add_parser("stop", help="Stop running tasks and reset state")
-
-    # kill
     subparsers.add_parser("kill", help="Terminate gateway server background process")
 
-    # history
     hist_parser = subparsers.add_parser("history", help="List past browser sessions from index.json")
     hist_parser.add_argument("--month", default=None, help="Filter by month (e.g. 2026-08)")
     hist_parser.add_argument("--query", "-q", default="", help="Search keyword for titles/paths/status")
     hist_parser.add_argument("--limit", type=int, default=10, help="Maximum number of sessions to return")
     hist_parser.add_argument("--json", action="store_true", help="Output raw JSON array")
 
-    # logs
     logs_parser = subparsers.add_parser("logs", help="Display chronological event thread from session.jsonl")
     logs_parser.add_argument("--path", required=True, help="Session directory path (e.g. server/logs/2026-08-21/...)")
     logs_parser.add_argument("--json", action="store_true", help="Output raw JSON format")
 
-    # doc
-    doc_parser = subparsers.add_parser("doc", help="Display or regenerate consolidated session document (SESSION_DOCUMENT.md)")
+    doc_parser = subparsers.add_parser("doc", help="Display or regenerate consolidated session document")
     doc_parser.add_argument("--path", required=True, help="Session directory path (e.g. server/logs/2026-08-21/...)")
     doc_parser.add_argument("--json", action="store_true", help="Output raw JSON format")
 
-    # export-all
+    thread_parser = subparsers.add_parser("thread", help="Display or regenerate standalone execution thread (THREAD.md)")
+    thread_parser.add_argument("--path", required=True, help="Session directory path (e.g. server/logs/2026-08-21/...)")
+    thread_parser.add_argument("--json", action="store_true", help="Output raw JSON format")
+
     exp_parser = subparsers.add_parser("export-all", help="Export unified master session timeline to Markdown")
     exp_parser.add_argument("--month", default=None, help="Filter by month (e.g. 2026-08)")
     exp_parser.add_argument("--out", default="./ALL_SESSIONS_TIMELINE.md", help="Output markdown file path")
 
-    # subskills
     subskills_parser = subparsers.add_parser("subskills", help="Manage and borrow reusable browser subskills")
     subskills_sub = subskills_parser.add_subparsers(dest="subskills_command", help="Subskills action")
 
-    # subskills list
     sk_list = subskills_sub.add_parser("list", help="List registered subskills")
     sk_list.add_argument("--query", "-q", default="", help="Search keywords")
     sk_list.add_argument("--tags", "-t", default=None, help="Comma-separated tags")
     sk_list.add_argument("--json", action="store_true", help="Output raw JSON")
 
-    # subskills show
     sk_show = subskills_sub.add_parser("show", help="Show subskill playbook and details")
     sk_show.add_argument("name", help="Slug name of subskill")
     sk_show.add_argument("--json", action="store_true", help="Output raw JSON")
 
-    # subskills borrow
     sk_borrow = subskills_sub.add_parser("borrow", help="Borrow subskill into active session")
     sk_borrow.add_argument("name", help="Slug name of subskill to borrow")
-    sk_borrow.add_argument("--title", default="AgentSocket Task", help="Target session title")
+    sk_borrow.add_argument("--title", required=True, help="Target session title provided by agent")
     sk_borrow.add_argument("--gid", type=int, default=None, help="Target tab group ID")
     sk_borrow.add_argument("--input", default=None, help="Path of input file to copy into input/ folder")
     sk_borrow.add_argument("--json", action="store_true", help="Output raw JSON")
 
-    # subskills register
     sk_reg = subskills_sub.add_parser("register", help="Register a session as a reusable subskill")
     sk_reg.add_argument("--session", required=True, help="Path to session folder")
     sk_reg.add_argument("--name", required=True, help="Slug identifier for subskill")
@@ -689,105 +973,48 @@ def main():
     sk_reg.add_argument("--tools", default=None, help="Comma-separated adhoc tool filenames")
     sk_reg.add_argument("--json", action="store_true", help="Output raw JSON")
 
+    adhocs_parser = subparsers.add_parser("adhocs", help="Manage and execute shared & subskill adhoc tools (Spec 18)")
+    adhocs_sub = adhocs_parser.add_subparsers(dest="adhocs_command", help="Adhocs action")
+
+    adh_list = adhocs_sub.add_parser("list", help="List universal shared adhoc tools in central vault")
+    adh_list.add_argument("--json", action="store_true", help="Output raw JSON")
+
+    adh_promote = adhocs_sub.add_parser("promote", help="Promote a session adhoc tool to universal or subskill vault")
+    adh_promote.add_argument("--session", required=True, help="Path to session folder containing tool in adhocs/")
+    adh_promote.add_argument("--tool", required=True, help="Filename of the adhoc script to promote")
+    adh_promote.add_argument("--target", choices=["universal", "subskill"], default="universal", help="Target vault")
+    adh_promote.add_argument("--subskill", default=None, help="Target subskill name (if target is subskill)")
+    adh_promote.add_argument("--json", action="store_true", help="Output raw JSON")
+
+    adh_resolve = adhocs_sub.add_parser("resolve", help="Resolve tool path through 3-tier hierarchy")
+    adh_resolve.add_argument("--tool", required=True, help="Filename of the adhoc script")
+    adh_resolve.add_argument("--session", default=None, help="Optional session path for local & borrowed subskill resolution")
+    adh_resolve.add_argument("--json", action="store_true", help="Output raw JSON")
+
+    adh_run = adhocs_sub.add_parser("run", help="Execute an adhoc tool via hierarchical resolution")
+    adh_run.add_argument("--tool", required=True, help="Filename of the adhoc script")
+    adh_run.add_argument("--session", default=None, help="Optional session path for context")
+    adh_run.add_argument("args", nargs="*", help="Arguments to pass to the adhoc script")
+    adh_run.add_argument("--json", action="store_true", help="Output raw JSON")
+
+    return parser
+
+
+def main() -> None:
+    parser = build_cli_parser()
     args = parser.parse_args()
+    cmd = args.command or "status"
 
-    try:
-        if not args.command or args.command == "status":
-            status = get_gateway_status()
-            print(json.dumps(status, indent=2))
-
-        elif args.command in ("plug", "start"):
-            status = ensure_ready()
-            print(json.dumps(status, indent=2))
-
-        elif args.command == "navigate":
-            res = execute_action("navigate", args.url, requires_privacy_check=args.privacy, session_title=args.title)
-            print(json.dumps(res, indent=2))
-
-        elif args.command == "eval":
-            res = execute_action("execute_js", args.code, requires_privacy_check=args.privacy, session_title=args.title)
-            print(json.dumps(res, indent=2))
-
-        elif args.command == "release":
-            res = release_takeover(args.notes)
-            print(json.dumps(res, indent=2))
-
-        elif args.command == "stop":
-            res = stop_tasks()
-            print(json.dumps(res, indent=2))
-
-        elif args.command == "kill":
-            kill_server()
-
-        elif args.command == "history":
-            results = query_history(query_hint=args.query, month=args.month, limit=args.limit)
-            if getattr(args, "json", False):
-                print(json.dumps(results, indent=2))
-            else:
-                print_history_table(results)
-
-        elif args.command == "logs":
-            details = get_session_details(session_path=args.path)
-            if getattr(args, "json", False):
-                print(json.dumps(details, indent=2))
-            else:
-                print_session_logs(details)
-
-        elif args.command == "doc":
-            doc_text = get_session_document(session_path=args.path)
-            if getattr(args, "json", False):
-                print(json.dumps({"session_path": args.path, "document_markdown": doc_text}, indent=2))
-            else:
-                print("\n" + doc_text + "\n")
-
-        elif args.command == "export-all":
-            out_path = args.out
-            md = export_all_timeline(month=args.month, output_path=out_path)
-            print(f"[AgentSocket] Exported master session history timeline ({len(md)} chars) to: {out_path}")
-
-        elif args.command == "subskills":
-            if not args.subskills_command or args.subskills_command == "list":
-                results = list_subskills(query=getattr(args, "query", ""), tags=getattr(args, "tags", None))
-                if getattr(args, "json", False):
-                    print(json.dumps(results, indent=2))
-                else:
-                    print_subskills_table(results)
-
-            elif args.subskills_command == "show":
-                details = get_subskill(name=args.name)
-                if getattr(args, "json", False):
-                    print(json.dumps(details, indent=2))
-                else:
-                    print_subskill_details(details)
-
-            elif args.subskills_command == "borrow":
-                res = borrow_subskill(
-                    name=args.name,
-                    session_title=args.title,
-                    tab_group_id=args.gid,
-                    input_file_path=args.input,
-                )
-                print(json.dumps(res, indent=2))
-
-            elif args.subskills_command == "register":
-                tag_list = [t.strip() for t in args.tags.split(",") if t.strip()] if args.tags else None
-                tool_list = [t.strip() for t in args.tools.split(",") if t.strip()] if args.tools else None
-                res = register_subskill(
-                    session_path=args.session,
-                    name=args.name,
-                    display_title=args.title,
-                    description=args.description,
-                    tags=tag_list,
-                    adhoc_tools=tool_list,
-                )
-                print(json.dumps(res, indent=2))
-
-    except KeyboardInterrupt:
-        print("\n[AgentSocket] Command cancelled by user.")
-        sys.exit(0)
+    handler = COMMAND_DISPATCH.get(cmd)
+    if handler:
+        try:
+            handler(args)
+        except KeyboardInterrupt:
+            print("\n[AgentSocket] Command cancelled by user.")
+            sys.exit(0)
+    else:
+        parser.print_help()
 
 
 if __name__ == "__main__":
     main()
-
-
