@@ -22,6 +22,8 @@
         // Gateway WebSocket <-> Extension
         EXECUTE_ACTION: "execute_action",
         COMMAND_RESPONSE: "command_response",
+        OBSERVE_PAGE: "observe_page",
+        OBSERVE_RESPONSE: "observe_response",
         STATE_CHANGE: "state_change",
         STATE_SYNC: "state_sync",
         PING: "ping",

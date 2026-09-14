@@ -191,11 +191,388 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             sendResponse({ status: "success" });
             break;
 
+        case "observe_page":
+        case "OBSERVE_PAGE":
+            const obsResult = observePage(message.options || {});
+            sendResponse(obsResult);
+            break;
+
         default:
             break;
     }
     return false;
 });
+
+// ============================================================================
+// ARIA TREEWALKER & EPHEMERAL NUMERIC BADGING ENGINE (Spec 19)
+// ============================================================================
+
+// Ephemeral Weak/Strong registry mapping numeric element ID -> live DOM node
+if (typeof window !== "undefined") {
+    window.__agentsocket_elements = window.__agentsocket_elements || new Map();
+}
+
+let badgeFadeTimeout = null;
+
+function isElementVisible(el) {
+    if (!el || !el.isConnected) return false;
+
+    // Ignore internal AgentSocket UI containers
+    if (el.id === "agentsocket-hud-host" || (el.closest && el.closest("#agentsocket-hud-host"))) {
+        return false;
+    }
+
+    // Geometry check
+    const rect = el.getBoundingClientRect ? el.getBoundingClientRect() : { width: 0, height: 0, top: 0, bottom: 0 };
+    if (rect.width < 4 || rect.height < 4) return false;
+
+    // Viewport proximity threshold (+600px vertical buffer)
+    const viewHeight = (typeof window !== "undefined" && window.innerHeight) ? window.innerHeight : 800;
+    if (rect.top > viewHeight + 600 || rect.bottom < -600) return false;
+
+    // Computed visibility and opacity check
+    if (typeof window !== "undefined" && window.getComputedStyle) {
+        try {
+            const style = window.getComputedStyle(el);
+            if (style.display === "none" || style.visibility === "hidden" || parseFloat(style.opacity || "1") <= 0.05) {
+                return false;
+            }
+        } catch (e) {}
+    }
+
+    return true;
+}
+
+function isInteractiveElement(el) {
+    if (!el || el.nodeType !== 1) return false;
+    if (!isElementVisible(el)) return false;
+
+    // Ignore disabled elements
+    if (el.disabled || el.getAttribute("aria-disabled") === "true") return false;
+
+    const tag = (el.tagName || "").toUpperCase();
+
+    // Standard interactive HTML elements
+    if (tag === "BUTTON" || tag === "SELECT" || tag === "TEXTAREA" || tag === "DETAILS" || tag === "SUMMARY") {
+        return true;
+    }
+    if (tag === "A" && el.hasAttribute("href")) {
+        return true;
+    }
+    if (tag === "INPUT" && (el.type || "").toLowerCase() !== "hidden") {
+        return true;
+    }
+
+    // Semantic ARIA interactive roles
+    const role = (el.getAttribute("role") || "").toLowerCase();
+    const interactiveRoles = [
+        "button", "link", "checkbox", "radio", "menuitem", "menuitemcheckbox",
+        "menuitemradio", "tab", "combobox", "switch", "searchbox", "textbox", "option"
+    ];
+    if (interactiveRoles.includes(role)) {
+        return true;
+    }
+
+    // Generic interactive attributes
+    if (el.hasAttribute("tabindex") && parseInt(el.getAttribute("tabindex"), 10) >= 0) {
+        return true;
+    }
+    if (el.isContentEditable || el.getAttribute("contenteditable") === "true") {
+        return true;
+    }
+
+    // Pointer cursor check for leaf nodes
+    if (typeof window !== "undefined" && window.getComputedStyle) {
+        try {
+            const style = window.getComputedStyle(el);
+            if (style.cursor === "pointer" && el.children && el.children.length === 0) {
+                return true;
+            }
+        } catch (e) {}
+    }
+
+    return false;
+}
+
+function extractElementLabel(el) {
+    // 1. Explicit ARIA label
+    const ariaLabel = el.getAttribute("aria-label");
+    if (ariaLabel && ariaLabel.trim()) return ariaLabel.trim();
+
+    // 2. ARIA labelledby reference
+    const ariaLabelledBy = el.getAttribute("aria-labelledby");
+    if (ariaLabelledBy && typeof document !== "undefined") {
+        const labellingEl = document.getElementById(ariaLabelledBy);
+        if (labellingEl && (labellingEl.innerText || labellingEl.textContent)) {
+            const lbl = (labellingEl.innerText || labellingEl.textContent).trim();
+            if (lbl) return lbl;
+        }
+    }
+
+    // 3. Associated <label> element
+    if (el.labels && el.labels.length > 0 && el.labels[0]) {
+        const lbl = (el.labels[0].innerText || el.labels[0].textContent || "").trim();
+        if (lbl) return lbl;
+    }
+
+    // 4. Inner text content (truncated for readability)
+    const text = el.innerText || el.textContent;
+    if (text && text.trim()) {
+        const cleaned = text.trim().replace(/\s+/g, " ");
+        if (cleaned.length > 60) return cleaned.slice(0, 57) + "...";
+        return cleaned;
+    }
+
+    // 5. Placeholder / title / name fallback
+    if (el.placeholder && el.placeholder.trim()) return el.placeholder.trim();
+    if (el.title && el.title.trim()) return el.title.trim();
+    if (el.name && el.name.trim()) return el.name.trim();
+
+    return "";
+}
+
+function extractElementValue(el) {
+    const tag = (el.tagName || "").toUpperCase();
+    if (tag === "INPUT") {
+        const type = (el.type || "").toLowerCase();
+        if (type === "password") {
+            return "[REDACTED]";
+        }
+        if (type === "checkbox" || type === "radio") {
+            return el.checked ? "checked" : "unchecked";
+        }
+        return el.value || "";
+    }
+    if (tag === "SELECT") {
+        if (el.selectedIndex >= 0 && el.options && el.options[el.selectedIndex]) {
+            return el.options[el.selectedIndex].text || el.value || "";
+        }
+        return el.value || "";
+    }
+    if (tag === "TEXTAREA") {
+        return el.value || "";
+    }
+    return "";
+}
+
+function traverseAriaTree(root) {
+    const rootEl = root || (typeof document !== "undefined" ? (document.body || document.documentElement) : null);
+    if (!rootEl) {
+        return { elements: [], tree_text: "" };
+    }
+
+    if (typeof window !== "undefined") {
+        window.__agentsocket_elements = new Map();
+    }
+
+    const interactiveNodes = [];
+    const elementsList = [];
+    let currentId = 1;
+
+    // Use DOM TreeWalker if available
+    if (typeof document !== "undefined" && document.createTreeWalker && typeof NodeFilter !== "undefined") {
+        const walker = document.createTreeWalker(
+            rootEl,
+            NodeFilter.SHOW_ELEMENT,
+            {
+                acceptNode: function (node) {
+                    if (node.id === "agentsocket-hud-host") {
+                        return NodeFilter.FILTER_REJECT;
+                    }
+                    if (isInteractiveElement(node)) {
+                        return NodeFilter.FILTER_ACCEPT;
+                    }
+                    // Include structural landmark headings
+                    if (/^H[1-6]$/.test(node.tagName) && isElementVisible(node)) {
+                        return NodeFilter.FILTER_ACCEPT;
+                    }
+                    return NodeFilter.FILTER_SKIP;
+                }
+            },
+            false
+        );
+
+        let currentNode = walker.nextNode();
+        while (currentNode) {
+            interactiveNodes.push(currentNode);
+            currentNode = walker.nextNode();
+        }
+    } else if (rootEl.querySelectorAll) {
+        const all = rootEl.querySelectorAll("*");
+        for (let i = 0; i < all.length; i++) {
+            const node = all[i];
+            if (node.id === "agentsocket-hud-host") continue;
+            if (isInteractiveElement(node) || (/^H[1-6]$/.test(node.tagName) && isElementVisible(node))) {
+                interactiveNodes.push(node);
+            }
+        }
+    }
+
+    const lines = [];
+
+    for (const node of interactiveNodes) {
+        const tag = (node.tagName || "").toUpperCase();
+
+        // Structural Headings (H1..H6)
+        if (/^H[1-6]$/.test(tag) && !isInteractiveElement(node)) {
+            const headingText = (node.innerText || node.textContent || "").trim();
+            if (headingText) {
+                lines.push(`\nHeading ${tag.slice(1)}: ${headingText}`);
+            }
+            continue;
+        }
+
+        const id = currentId++;
+        if (typeof window !== "undefined" && window.__agentsocket_elements) {
+            window.__agentsocket_elements.set(id, node);
+        }
+
+        const rect = node.getBoundingClientRect ? node.getBoundingClientRect() : { left: 0, top: 0, width: 0, height: 0 };
+        const role = (node.getAttribute("role") || tag.toLowerCase()).toLowerCase();
+        const label = extractElementLabel(node);
+        const value = extractElementValue(node);
+        const type = node.type || null;
+        const placeholder = node.placeholder || null;
+
+        const descriptor = {
+            id: id,
+            tag: tag,
+            type: type,
+            role: role,
+            name: label,
+            value: value,
+            placeholder: placeholder,
+            rect: {
+                x: Math.round(rect.left || 0),
+                y: Math.round(rect.top || 0),
+                width: Math.round(rect.width || 0),
+                height: Math.round(rect.height || 0)
+            },
+            is_visible: true,
+            is_interactive: true
+        };
+        elementsList.push(descriptor);
+
+        // Compact token-efficient line formatting
+        let meta = role;
+        if (type && type !== "text" && type !== role) meta += `, type="${type}"`;
+        if (value) meta += `, value="${value}"`;
+        if (placeholder) meta += `, placeholder="${placeholder}"`;
+
+        const displayLabel = label ? ` "${label}"` : "";
+        lines.push(`[${id}]${displayLabel} (${meta})`);
+    }
+
+    return {
+        elements: elementsList,
+        tree_text: lines.join("\n").trim()
+    };
+}
+
+function removeBadges() {
+    if (typeof document === "undefined") return;
+    const shadow = getOrCreateShadowRoot();
+    if (!shadow) return;
+    const container = shadow.getElementById("agentsocket-badges-container");
+    if (container) {
+        container.style.opacity = "0";
+        setTimeout(() => {
+            if (container.parentNode) container.remove();
+        }, 200);
+    }
+}
+
+function renderBadges(elements) {
+    if (typeof document === "undefined") return;
+    removeBadges();
+    const shadow = getOrCreateShadowRoot();
+    if (!shadow) return;
+
+    const container = document.createElement("div");
+    container.id = "agentsocket-badges-container";
+    container.style.cssText = `
+        position: fixed !important;
+        top: 0 !important;
+        left: 0 !important;
+        width: 100vw !important;
+        height: 100vh !important;
+        pointer-events: none !important;
+        z-index: 2147483645 !important;
+        transition: opacity 0.25s ease !important;
+        opacity: 1 !important;
+    `;
+
+    const viewHeight = (typeof window !== "undefined" && window.innerHeight) ? window.innerHeight : 800;
+
+    for (const elData of elements) {
+        const node = (typeof window !== "undefined" && window.__agentsocket_elements) 
+            ? window.__agentsocket_elements.get(elData.id) 
+            : null;
+        if (!node || !node.getBoundingClientRect) continue;
+
+        const rect = node.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) continue;
+        if (rect.bottom < 0 || rect.top > viewHeight) continue;
+
+        const badge = document.createElement("div");
+        badge.className = "agentsocket-badge-pill";
+        badge.textContent = `[${elData.id}]`;
+        badge.style.cssText = `
+            position: fixed !important;
+            top: ${Math.max(2, Math.round(rect.top - 4))}px !important;
+            left: ${Math.max(2, Math.round(rect.left - 4))}px !important;
+            background: #1e1e2e !important;
+            color: #a6e3a1 !important;
+            border: 1px solid rgba(166, 227, 161, 0.5) !important;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
+            font-size: 10px !important;
+            font-weight: 700 !important;
+            line-height: 1.2 !important;
+            padding: 2px 4px !important;
+            border-radius: 4px !important;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.5) !important;
+            pointer-events: none !important;
+            user-select: none !important;
+        `;
+        container.appendChild(badge);
+    }
+
+    shadow.appendChild(container);
+
+    if (badgeFadeTimeout) clearTimeout(badgeFadeTimeout);
+    badgeFadeTimeout = setTimeout(() => {
+        removeBadges();
+    }, 1500);
+}
+
+function observePage(options = {}) {
+    const root = options.root || (typeof document !== "undefined" ? (document.body || document.documentElement) : null);
+    const { elements, tree_text } = traverseAriaTree(root);
+
+    if (options.show_badges !== false && typeof document !== "undefined") {
+        renderBadges(elements);
+    }
+
+    return {
+        status: "success",
+        url: typeof window !== "undefined" ? window.location.href : "",
+        title: typeof document !== "undefined" ? document.title : "",
+        viewport: {
+            width: typeof window !== "undefined" ? window.innerWidth : 1280,
+            height: typeof window !== "undefined" ? window.innerHeight : 800,
+            scroll_y: typeof window !== "undefined" ? (window.scrollY || window.pageYOffset || 0) : 0
+        },
+        tree_text: tree_text,
+        elements: elements,
+        screenshot_path: null
+    };
+}
+
+if (typeof window !== "undefined") {
+    window.__agentsocket_observe = observePage;
+    window.__agentsocket_remove_badges = removeBadges;
+    window.__agentsocket_traverse_aria = traverseAriaTree;
+}
 
 // ============================================================================
 // THEME PALETTE HELPER
@@ -1029,3 +1406,17 @@ function escapeHtml(str) {
         .replace(/"/g, "&quot;")
         .replace(/'/g, "&#039;");
 }
+
+if (typeof module !== "undefined" && module.exports) {
+    module.exports = {
+        isElementVisible,
+        isInteractiveElement,
+        extractElementLabel,
+        extractElementValue,
+        traverseAriaTree,
+        renderBadges,
+        removeBadges,
+        observePage
+    };
+}
+
