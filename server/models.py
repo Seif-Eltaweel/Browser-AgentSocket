@@ -86,6 +86,7 @@ class AgentActionPayload(BaseModel):
     requires_privacy_check: bool = Field(default=False, description="Flag indicating sensitive scope check")
     # to get a title for each grouped session 
     session_title: str = Field(..., description="Tab group session title provided by the agent")
+    tab_group_id: int | None = Field(default=None, description="Optional target tab group ID")
 
 
 class ProgressPayload(BaseModel):
@@ -100,6 +101,57 @@ class ProgressPayload(BaseModel):
 
 class ReleasePayload(BaseModel):
     notes: str | None = Field(default=None, description="Handoff notes from the human operator")
+    tab_group_id: int | None = Field(default=None, description="Optional target tab group ID to release")
+
+
+# ============================================================================
+# Atomic OODA Schemas (Spec 23)
+# ============================================================================
+
+class ObserveRequest(BaseModel):
+    tab_group_id: int | None = None
+    take_screenshot: bool = False
+
+
+class ObserveResponse(BaseModel):
+    status: str
+    url: str = ""
+    title: str = ""
+    viewport: dict[str, Any] = Field(default_factory=dict)
+    tree_text: str = ""
+    elements: list[dict[str, Any]] = Field(default_factory=list)
+    screenshot_path: str | None = None
+
+
+class ActRequest(BaseModel):
+    tab_group_id: int | None = None
+    action: str  # "click", "type", "scroll", "key_press"
+    element_id: int | None = None
+    text: str | None = None
+    clear_first: bool = False
+    press_enter: bool = False
+    direction: str | None = None
+    amount: int | None = None
+    key: str | None = None
+    wait_settle: bool = True
+
+
+class ActResponse(BaseModel):
+    status: str
+    action: str
+    element_id: int | None = None
+    duration_ms: float = 0.0
+    mutations_observed: int = 0
+    settle_reason: str = "quiescence"
+    intervention_notes: str | None = None  # Preserves human context without dropping command!
+
+
+class SetIntentRequest(BaseModel):
+    tab_group_id: int | None = None
+    intent: str
+    subtext: str = ""
+    phase: str | None = None
+
 
 
 class ErrorDetail(BaseModel):

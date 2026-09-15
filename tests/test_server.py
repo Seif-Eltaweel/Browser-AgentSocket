@@ -18,6 +18,7 @@ class TestServerEndpoints(unittest.TestCase):
         state.human_in_control = False
         state.last_intervention_notes = None
         state.extension_ws = None
+        state.tab_sessions.clear()
         state.pending_responses.clear()
         state.global_permissions = {"enable_subskills": True, "enable_vision": False}
         state.session_permissions.clear()
@@ -92,20 +93,32 @@ class TestServerEndpoints(unittest.TestCase):
         self.assertEqual(state.last_intervention_notes, "Finished MFA successfully.")
 
     def test_execute_resumed_context_handoff(self):
+        # Spec 23 Flaw 4 fix: intervention notes returned as metadata without dropping command
+        import json
         state.human_in_control = False
         state.last_intervention_notes = "Manual step finished."
+
+        class MockWS:
+            async def send_text(self, text):
+                payload = json.loads(text)
+                cmd_id = payload.get("id")
+                fut = state.find_pending_future(cmd_id)
+                if fut and not fut.done():
+                    fut.set_result({"status": "success", "url": payload.get("target_data")})
+
+        state.extension_ws = MockWS()
 
         resp = self.client.post("/execute", json={
             "id": "cmd-test-4",
             "action_type": "navigate",
-            "target_data": "https://example.com/checkout",
+            "target_data": "https://example.com/items",
             "session_title": "Test Resumed Context",
             "requires_privacy_check": False
         })
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
-        self.assertEqual(data["status"], ResponseStatus.RESUMED_CONTEXT.value)
-        self.assertIn("Manual step finished.", data["message"])
+        self.assertEqual(data["status"], ResponseStatus.SUCCESS.value)
+        self.assertEqual(data["intervention_notes"], "Manual step finished.")
         # Injected notes should be cleared after consumption
         self.assertIsNone(state.last_intervention_notes)
 
@@ -300,8 +313,193 @@ class TestServerEndpoints(unittest.TestCase):
         data = resp.json()
         self.assertEqual(data["message"], "Extension is offline.")
 
+    def test_tab_group_takeover_isolation(self):
+        # Spec 23 Flaw 3 test: setting takeover on tab_group_id 101 does NOT pause tab_group_id 102
+        import json
+        state.get_session(101).human_in_control = True
+        state.get_session(101).last_intervention_notes = "User solving 2FA on tab 101"
+
+        # Check session 102 is free
+        self.assertFalse(state.get_session(102).human_in_control)
+
+        # Query /status for both groups
+        status_101 = self.client.get("/status?tab_group_id=101").json()
+        self.assertTrue(status_101["human_in_control"])
+        self.assertEqual(status_101["last_intervention_notes"], "User solving 2FA on tab 101")
+
+        status_102 = self.client.get("/status?tab_group_id=102").json()
+        self.assertFalse(status_102["human_in_control"])
+        self.assertIsNone(status_102["last_intervention_notes"])
+
+        # POST /act on group 101 is human_locked
+        act_101 = self.client.post("/act", json={
+            "tab_group_id": 101,
+            "action": "click",
+            "element_id": 4
+        }).json()
+        self.assertEqual(act_101["status"], ResponseStatus.HUMAN_LOCKED.value)
+        self.assertEqual(act_101["intervention_notes"], "User solving 2FA on tab 101")
+
+        # POST /act on group 102 executes normally through extension
+        class MockWS:
+            async def send_text(self, text):
+                data = json.loads(text)
+                req_id = data.get("request_id")
+                fut = state.find_pending_future(req_id)
+                if fut and not fut.done():
+                    fut.set_result({
+                        "status": "success",
+                        "mutations_observed": 1,
+                        "settle_reason": "quiescence",
+                        "duration_ms": 12.5
+                    })
+
+        state.extension_ws = MockWS()
+        act_102 = self.client.post("/act", json={
+            "tab_group_id": 102,
+            "action": "click",
+            "element_id": 9
+        }).json()
+        self.assertEqual(act_102["status"], "success")
+        self.assertEqual(act_102["element_id"], 9)
+        self.assertEqual(act_102["mutations_observed"], 1)
+
+    def test_act_element_rpc_and_notes(self):
+        # Spec 23 Flaw 4 test: act_element executes action and returns intervention_notes in ActResponse
+        import json
+        state.get_session(201).human_in_control = False
+        state.get_session(201).last_intervention_notes = "User filled captcha and handed off"
+
+        captured_frames = []
+
+        class MockWS:
+            async def send_text(self, text):
+                data = json.loads(text)
+                captured_frames.append(data)
+                req_id = data.get("request_id")
+                fut = state.find_pending_future(req_id)
+                if fut and not fut.done():
+                    fut.set_result({
+                        "status": "success",
+                        "mutations_observed": 3,
+                        "settle_reason": "quiescence",
+                        "duration_ms": 35.0
+                    })
+
+        state.extension_ws = MockWS()
+
+        resp = self.client.post("/act", json={
+            "tab_group_id": 201,
+            "action": "type",
+            "element_id": 7,
+            "text": "Antigravity Agent",
+            "clear_first": True,
+            "press_enter": True
+        })
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+
+        # Command must execute normally (NOT dropped)
+        self.assertEqual(data["status"], "success")
+        self.assertEqual(data["action"], "type")
+        self.assertEqual(data["element_id"], 7)
+        self.assertEqual(data["mutations_observed"], 3)
+        self.assertEqual(data["settle_reason"], "quiescence")
+        self.assertEqual(data["intervention_notes"], "User filled captcha and handed off")
+
+        # Cache must be cleared on session
+        self.assertIsNone(state.get_session(201).last_intervention_notes)
+
+        # Outbound frame must have been dispatched
+        self.assertEqual(len(captured_frames), 1)
+        self.assertEqual(captured_frames[0]["tab_group_id"], 201)
+        self.assertEqual(captured_frames[0]["action"], "type")
+        self.assertEqual(captured_frames[0]["element_id"], 7)
+        self.assertEqual(captured_frames[0]["text"], "Antigravity Agent")
+
+    def test_observe_page_rpc(self):
+        # Spec 23 test: observe_page RPC correlation future
+        import json
+        class MockWS:
+            async def send_text(self, text):
+                data = json.loads(text)
+                req_id = data.get("request_id")
+                fut = state.find_pending_future(req_id)
+                if fut and not fut.done():
+                    fut.set_result({
+                        "status": "success",
+                        "url": "https://example.com/search",
+                        "title": "Search Page",
+                        "viewport": {"width": 1280, "height": 800},
+                        "tree_text": "[1] (input) Search\n[2] (button) Submit",
+                        "elements": [
+                            {"id": 1, "role": "input", "label": "Search"},
+                            {"id": 2, "role": "button", "label": "Submit"}
+                        ]
+                    })
+
+        state.extension_ws = MockWS()
+
+        resp = self.client.post("/observe", json={
+            "tab_group_id": 301,
+            "take_screenshot": False
+        })
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["status"], "success")
+        self.assertEqual(data["url"], "https://example.com/search")
+        self.assertEqual(data["title"], "Search Page")
+        self.assertIn("[1] (input) Search", data["tree_text"])
+        self.assertEqual(len(data["elements"]), 2)
+
+    def test_set_intent_dispatch(self):
+        # Spec 23 test: set_intent WebSocket frame dispatch
+        import json
+        sent_messages = []
+
+        class MockWS:
+            async def send_text(self, text):
+                sent_messages.append(json.loads(text))
+
+        state.extension_ws = MockWS()
+
+        resp = self.client.post("/set_intent", json={
+            "tab_group_id": 401,
+            "intent": "Filter apartments by rent",
+            "subtext": "Typing 15000 in price filter",
+            "phase": "Phase 2/3"
+        })
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["status"], "success")
+
+        self.assertEqual(len(sent_messages), 1)
+        frame = sent_messages[0]
+        self.assertEqual(frame["type"], "set_intent")
+        self.assertEqual(frame["tab_group_id"], 401)
+        self.assertEqual(frame["intent"], "Filter apartments by rent")
+        self.assertEqual(frame["subtext"], "Typing 15000 in price filter")
+        self.assertEqual(frame["phase"], "Phase 2/3")
+
+    def test_scoped_human_release(self):
+        # Spec 23 test: releasing tab 101 does not release tab 102
+        state.get_session(101).human_in_control = True
+        state.get_session(102).human_in_control = True
+
+        resp = self.client.post("/human_release", json={
+            "notes": "Tab 101 released",
+            "tab_group_id": 101
+        })
+        self.assertEqual(resp.status_code, 200)
+
+        self.assertFalse(state.get_session(101).human_in_control)
+        self.assertEqual(state.get_session(101).last_intervention_notes, "Tab 101 released")
+
+        # Tab 102 should still be locked
+        self.assertTrue(state.get_session(102).human_in_control)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
 

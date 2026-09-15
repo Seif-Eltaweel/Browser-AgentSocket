@@ -104,16 +104,20 @@ class ResilientSocket {
                     const result = await handleObservePage(data, data.session_title);
                     this.send({
                         type: MT.OBSERVE_RESPONSE,
-                        command_id: data.id || data.command_id,
+                        command_id: data.id || data.command_id || data.request_id,
+                        request_id: data.request_id || data.id || data.command_id,
                         payload: result
                     });
                 } else if (data.type === MT.ACT_ELEMENT || data.type === "act_element") {
                     const result = await handleActElement(data, data.session_title);
                     this.send({
                         type: MT.ACT_RESPONSE,
-                        command_id: data.id || data.command_id,
+                        command_id: data.id || data.command_id || data.request_id,
+                        request_id: data.request_id || data.id || data.command_id,
                         payload: result
                     });
+                } else if (data.type === MT.SET_INTENT || data.type === "set_intent") {
+                    await forwardIntentToTabs(data);
                 } else if (data.type === MT.STATE_SYNC) {
                     this.onStateSync(this.server, data);
                 } else if (data.type === MT.UPDATE_PROGRESS) {
@@ -659,7 +663,16 @@ async function handleSocketAction(command, server) {
     }
 }
 
-async function getActiveTabForSession(sessionTitle) {
+async function getActiveTabForSession(sessionTitle, tabGroupId) {
+    if (tabGroupId) {
+        try {
+            const tabs = await chrome.tabs.query({ groupId: Number(tabGroupId), active: true });
+            if (tabs && tabs.length > 0) return tabs[0].id;
+            const groupTabs = await chrome.tabs.query({ groupId: Number(tabGroupId) });
+            if (groupTabs && groupTabs.length > 0) return groupTabs[0].id;
+        } catch (e) {}
+    }
+
     const sess = activeSessions.get(sessionTitle);
     if (sess && sess.tabId) {
         try {
@@ -688,7 +701,7 @@ async function getActiveTabForSession(sessionTitle) {
 }
 
 async function handleObservePage(command, sessionTitle) {
-    const tabId = await getActiveTabForSession(sessionTitle);
+    const tabId = await getActiveTabForSession(sessionTitle, command.tab_group_id || command.groupId);
     if (!tabId) {
         return { status: "error", message: "No active tab found for session observation." };
     }
@@ -704,7 +717,7 @@ async function handleObservePage(command, sessionTitle) {
 }
 
 async function handleActElement(command, sessionTitle) {
-    const tabId = await getActiveTabForSession(sessionTitle);
+    const tabId = await getActiveTabForSession(sessionTitle, command.tab_group_id || command.groupId);
     if (!tabId) {
         return { status: "error", message: "No active tab found for acting on element." };
     }
@@ -717,6 +730,29 @@ async function handleActElement(command, sessionTitle) {
         return response || { status: "success" };
     } catch (err) {
         return { status: "error", message: `Failed to act on element: ${err.message}` };
+    }
+}
+
+async function forwardIntentToTabs(data) {
+    try {
+        let targetTabs = [];
+        if (data.tab_group_id) {
+            targetTabs = await chrome.tabs.query({ groupId: Number(data.tab_group_id) });
+        }
+        if (!targetTabs || targetTabs.length === 0) {
+            const activeTabId = await getActiveTabForSession(data.session_title, data.tab_group_id);
+            if (activeTabId) targetTabs = [{ id: activeTabId }];
+        }
+        for (const tab of targetTabs) {
+            chrome.tabs.sendMessage(tab.id, {
+                type: MT.SET_INTENT || "set_intent",
+                intent: data.intent,
+                subtext: data.subtext,
+                phase: data.phase
+            }).catch(() => {});
+        }
+    } catch (e) {
+        console.warn("[Hub] Failed forwarding intent to tabs:", e);
     }
 }
 

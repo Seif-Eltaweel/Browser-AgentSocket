@@ -12,6 +12,7 @@ import secrets
 import signal
 import sys
 import time
+import uuid
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -41,6 +42,11 @@ from server.models import (
     SessionStatus,
     StandardResponse,
     WSMessageType,
+    ObserveRequest,
+    ObserveResponse,
+    ActRequest,
+    ActResponse,
+    SetIntentRequest,
 )
 from server.session import session_manager
 
@@ -87,13 +93,41 @@ def get_or_generate_token() -> str:
     return token
 
 
-class SystemState:
-    def __init__(self) -> None:
-        self.extension_ws: WebSocket | None = None
+class TabSessionState:
+    """
+    Scoped session state per Chrome Tab Group (Spec 23 Flaw 3 Fix).
+    Isolates takeover status, intervention notes, active tab id, and correlation futures.
+    """
+    def __init__(self, tab_group_id: int) -> None:
+        self.tab_group_id: int = tab_group_id
         self.human_in_control: bool = False
         self.last_intervention_notes: str | None = None
-        self.takeover_start_time: float | None = None
+        self.active_tab_id: int | None = None
         self.pending_responses: dict[str, asyncio.Future] = {}
+        self.takeover_start_time: float | None = None
+
+
+class PendingResponsesDict(dict):
+    """
+    Dictionary proxy for pending correlation futures ensuring backward compatibility with state.pending_responses.
+    Clearing state.pending_responses clears all tab session pending futures as well.
+    """
+    def __init__(self, system_state: SystemState, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._system_state = system_state
+
+    def clear(self) -> None:
+        super().clear()
+        if hasattr(self, "_system_state") and self._system_state:
+            for s in list(self._system_state.tab_sessions.values()):
+                s.pending_responses.clear()
+
+
+class SystemState:
+    def __init__(self) -> None:
+        self.tab_sessions: dict[int, TabSessionState] = {}
+        self.extension_ws: WebSocket | None = None
+        self.pending_responses: PendingResponsesDict = PendingResponsesDict(self)
         self.last_activity_time: float = time.time()
         self.watchdog_task: asyncio.Task | None = None
         self.agent_name: str | None = None
@@ -101,6 +135,59 @@ class SystemState:
         self.server_token: str = get_or_generate_token()
         self.session_permissions: dict[str, dict[str, bool]] = {}
         self.global_permissions: dict[str, bool] = {"enable_subskills": True, "enable_vision": False}
+
+    def get_session(self, tab_group_id: int | None = None) -> TabSessionState:
+        gid = tab_group_id if tab_group_id is not None else 0
+        if gid not in self.tab_sessions:
+            self.tab_sessions[gid] = TabSessionState(gid)
+        return self.tab_sessions[gid]
+
+    @property
+    def human_in_control(self) -> bool:
+        if 0 in self.tab_sessions and self.tab_sessions[0].human_in_control:
+            return True
+        return any(s.human_in_control for s in self.tab_sessions.values())
+
+    @human_in_control.setter
+    def human_in_control(self, val: bool) -> None:
+        self.get_session(0).human_in_control = val
+
+    @property
+    def last_intervention_notes(self) -> str | None:
+        return self.get_session(0).last_intervention_notes
+
+    @last_intervention_notes.setter
+    def last_intervention_notes(self, val: str | None) -> None:
+        self.get_session(0).last_intervention_notes = val
+
+    @property
+    def takeover_start_time(self) -> float | None:
+        return self.get_session(0).takeover_start_time
+
+    @takeover_start_time.setter
+    def takeover_start_time(self, val: float | None) -> None:
+        self.get_session(0).takeover_start_time = val
+
+    def find_pending_future(self, request_id: str) -> asyncio.Future | None:
+        if not request_id:
+            return None
+        for session in self.tab_sessions.values():
+            if request_id in session.pending_responses:
+                return session.pending_responses[request_id]
+        if request_id in self.pending_responses:
+            return self.pending_responses[request_id]
+        return None
+
+    def pop_pending_future(self, request_id: str) -> asyncio.Future | None:
+        if not request_id:
+            return None
+        fut = None
+        for session in self.tab_sessions.values():
+            if request_id in session.pending_responses:
+                fut = session.pending_responses.pop(request_id, None) or fut
+        if request_id in self.pending_responses:
+            fut = self.pending_responses.pop(request_id, None) or fut
+        return fut
 
     def record_activity(self) -> None:
         self.last_activity_time = time.time()
@@ -202,6 +289,11 @@ async def lifespan(app: FastAPI):
         state.watchdog_task.cancel()
 
     # Abort pending responses
+    for session in state.tab_sessions.values():
+        for cmd_id, future in list(session.pending_responses.items()):
+            if not future.done():
+                future.set_result({"status": "aborted", "message": "Server shutting down."})
+        session.pending_responses.clear()
     for cmd_id, future in list(state.pending_responses.items()):
         if not future.done():
             future.set_result({"status": "aborted", "message": "Server shutting down."})
@@ -259,24 +351,27 @@ app.add_middleware(
 
 
 @app.get("/")
-def read_root() -> dict[str, Any]:
+def read_root(tab_group_id: int | None = None) -> dict[str, Any]:
     state.record_activity()
+    session = state.get_session(tab_group_id)
     return {
         "status": "AgentSocket Server is Live",
         "extension_connected": state.extension_ws is not None,
-        "human_in_control": state.human_in_control,
+        "human_in_control": session.human_in_control,
         "idle_seconds_remaining": max(0.0, IDLE_TIMEOUT_SECONDS - (time.time() - state.last_activity_time)),
     }
 
 
 @app.get("/status")
-def get_status() -> dict[str, Any]:
+def get_status(tab_group_id: int | None = None) -> dict[str, Any]:
     state.record_activity()
+    session = state.get_session(tab_group_id)
     return {
         "status": "AgentSocket Server is Live",
         "extension_connected": state.extension_ws is not None,
-        "human_in_control": state.human_in_control,
-        "last_intervention_notes": state.last_intervention_notes,
+        "human_in_control": session.human_in_control,
+        "last_intervention_notes": session.last_intervention_notes,
+        "tab_group_id": session.tab_group_id,
         "idle_seconds_remaining": max(0.0, IDLE_TIMEOUT_SECONDS - (time.time() - state.last_activity_time)),
     }
 
@@ -497,15 +592,17 @@ async def extension_endpoint(websocket: WebSocket) -> None:
                 if message.get("group_color"):
                     state.group_color = message.get("group_color")
                 new_state = message.get("human_in_control", False)
-                if not new_state and state.human_in_control:
+                gid = message.get("tab_group_id") or message.get("groupId")
+                session = state.get_session(gid)
+                if not new_state and session.human_in_control:
                     logger.info("Extension sent release state. Release must go through the /human_release endpoint.")
                 else:
-                    state.human_in_control = new_state
-                    if state.human_in_control:
-                        state.takeover_start_time = time.time()
+                    session.human_in_control = new_state
+                    if session.human_in_control:
+                        session.takeover_start_time = time.time()
                         if message.get("notes"):
-                            state.last_intervention_notes = message.get("notes")
-                    logger.info(f"State Sync -> Human In Control: {state.human_in_control}")
+                            session.last_intervention_notes = message.get("notes")
+                    logger.info(f"State Sync [Group {session.tab_group_id}] -> Human In Control: {session.human_in_control}")
 
             elif msg_type in (
                 WSMessageType.COMMAND_RESPONSE.value,
@@ -515,9 +612,10 @@ async def extension_endpoint(websocket: WebSocket) -> None:
                 WSMessageType.ACT_RESPONSE.value,
                 "act_response",
             ):
-                cmd_id = message.get("command_id") or message.get("id")
-                if cmd_id in state.pending_responses:
-                    state.pending_responses[cmd_id].set_result(message.get("payload") if "payload" in message else message)
+                cmd_id = message.get("request_id") or message.get("command_id") or message.get("id")
+                fut = state.find_pending_future(cmd_id)
+                if fut and not fut.done():
+                    fut.set_result(message.get("payload") if "payload" in message else message)
 
     except WebSocketDisconnect:
         logger.info("Chrome Extension unplugged from AgentSocket bridge.")
@@ -533,24 +631,31 @@ async def execute_to_extension(command: AgentActionPayload) -> dict[str, Any]:
     t_start = time.time()
     session_title = command.session_title.strip()
 
-    # Non-blocking check: immediately report lock if human is currently in control
-    if state.human_in_control:
+    tab_group_id = command.tab_group_id
+    if tab_group_id is None:
+        active_sess = session_manager.get_active_session_by_title(session_title)
+        if active_sess:
+            tab_group_id = active_sess.tab_group_id
+        else:
+            tab_group_id = 0
+
+    session = state.get_session(tab_group_id)
+
+    # Non-blocking check: immediately report lock if human is currently in control for this tab group
+    if session.human_in_control:
         return {
             "status": ResponseStatus.HUMAN_LOCKED.value,
             "message": "Human operator is currently in control of the browser session.",
-            "last_intervention_notes": state.last_intervention_notes,
+            "last_intervention_notes": session.last_intervention_notes,
             "instructions": "Wait for human operator to click 'Release Control' or check GET /status.",
         }
 
-    # Check if we should inject human notes context from a recent release
-    if state.last_intervention_notes:
-        injected_context = f"[HUMAN INTERVENTION OVERRIDE LOG]: {state.last_intervention_notes}"
-        state.last_intervention_notes = None
-        return {
-            "status": ResponseStatus.RESUMED_CONTEXT.value,
-            "message": injected_context,
-            "instructions": "Human operator handoff caught. Adapt steps using log data.",
-        }
+    # Flaw 4 Fix: Non-dropping execution!
+    # Check if we should inject human notes context from a recent release without dropping command
+    intervention_notes_meta = None
+    if session.last_intervention_notes:
+        intervention_notes_meta = session.last_intervention_notes
+        session.last_intervention_notes = None
 
     # VISION PERMISSION ENFORCEMENT (Spec 22)
     act_val = command.action_type.value if hasattr(command.action_type, "value") else str(command.action_type)
@@ -587,15 +692,16 @@ async def execute_to_extension(command: AgentActionPayload) -> dict[str, Any]:
             reason = f"sensitive keywords detected: {', '.join(matched_kws)}"
 
     if trigger_fired:
-        state.human_in_control = True
-        state.takeover_start_time = time.time()
+        session.human_in_control = True
+        session.takeover_start_time = time.time()
         if state.extension_ws:
             await state.extension_ws.send_text(json.dumps({
                 "type": WSMessageType.STATE_SYNC.value,
                 "human_in_control": True,
+                "tab_group_id": session.tab_group_id,
                 "notes": f"Security Abort: {reason}",
             }))
-        logger.warning(f"Security Abort: Outbound requests locked. {reason}")
+        logger.warning(f"Security Abort [Group {session.tab_group_id}]: Outbound requests locked. {reason}")
 
         active_sess = session_manager.get_active_session_by_title(session_title)
         if active_sess:
@@ -614,15 +720,21 @@ async def execute_to_extension(command: AgentActionPayload) -> dict[str, Any]:
         }
 
     if not state.extension_ws:
-        return {
+        res = {
             "status": ResponseStatus.ERROR.value,
             "message": "Extension is offline.",
             "error": {"code": ErrorCode.EXTENSION_OFFLINE.value, "message": "Chrome extension is not plugged into WebSocket gateway."},
         }
+        if intervention_notes_meta:
+            res["intervention_notes"] = intervention_notes_meta
+            res["last_intervention_notes"] = intervention_notes_meta
+        return res
 
     cmd_id = command.id
     loop = asyncio.get_running_loop()
-    state.pending_responses[cmd_id] = loop.create_future()
+    fut = loop.create_future()
+    session.pending_responses[cmd_id] = fut
+    state.pending_responses[cmd_id] = fut
 
     await state.extension_ws.send_text(json.dumps({
         "type": WSMessageType.EXECUTE_ACTION.value,
@@ -631,10 +743,11 @@ async def execute_to_extension(command: AgentActionPayload) -> dict[str, Any]:
         "target_data": command.target_data,
         "requires_privacy_check": command.requires_privacy_check,
         "session_title": command.session_title,
+        "tab_group_id": session.tab_group_id,
     }))
 
     try:
-        result = await asyncio.wait_for(state.pending_responses[cmd_id], timeout=30.0)
+        result = await asyncio.wait_for(fut, timeout=30.0)
         t_end = time.time()
 
         # If extension returned an error (e.g. user denied authorization), do not persist or store session
@@ -642,11 +755,15 @@ async def execute_to_extension(command: AgentActionPayload) -> dict[str, Any]:
             error_data = result.get("error")
             err_code = error_data.get("code", ErrorCode.INTERNAL_ERROR.value) if isinstance(error_data, dict) else ErrorCode.INTERNAL_ERROR.value
             err_msg = error_data.get("message", result.get("message", "Browser action failed.")) if isinstance(error_data, dict) else result.get("message", "Browser action failed.")
-            return {
+            err_res = {
                 "status": ResponseStatus.ERROR.value,
                 "message": err_msg,
                 "error": {"code": err_code, "message": err_msg},
             }
+            if intervention_notes_meta:
+                err_res["intervention_notes"] = intervention_notes_meta
+                err_res["last_intervention_notes"] = intervention_notes_meta
+            return err_res
 
         tab_group_id = None
         tab_id = None
@@ -655,11 +772,7 @@ async def execute_to_extension(command: AgentActionPayload) -> dict[str, Any]:
             tab_id = result.get("tabId")
 
         if tab_group_id is None:
-            existing = session_manager.get_active_session_by_title(session_title)
-            if existing:
-                tab_group_id = existing.tab_group_id
-            else:
-                tab_group_id = 1
+            tab_group_id = session.tab_group_id or 1
 
         agent_name = (
             result.get("agent_name")
@@ -672,14 +785,14 @@ async def execute_to_extension(command: AgentActionPayload) -> dict[str, Any]:
             else (state.group_color or "purple")
         )
 
-        session = session_manager.get_or_create_session(
+        sess_obj = session_manager.get_or_create_session(
             tab_group_id=tab_group_id,
             tab_group_name=session_title,
             agent_name=agent_name,
             group_color=group_color,
         )
-        session.agent_name = agent_name
-        session.group_color = group_color
+        sess_obj.agent_name = agent_name
+        sess_obj.group_color = group_color
 
         act_val = command.action_type.value if hasattr(command.action_type, "value") else str(command.action_type)
         if act_val == ActionType.NAVIGATE.value:
@@ -720,7 +833,11 @@ async def execute_to_extension(command: AgentActionPayload) -> dict[str, Any]:
             )
             session_manager.finalize_session(tab_group_id=tab_group_id, status=SessionStatus.COMPLETED, end_reason="task_complete")
 
-        return {"status": ResponseStatus.SUCCESS.value, "result": result}
+        success_res = {"status": ResponseStatus.SUCCESS.value, "result": result}
+        if intervention_notes_meta:
+            success_res["intervention_notes"] = intervention_notes_meta
+            success_res["last_intervention_notes"] = intervention_notes_meta
+        return success_res
     except asyncio.TimeoutError:
         t_end = time.time()
         active_sess = session_manager.get_active_session_by_title(session_title)
@@ -733,49 +850,310 @@ async def execute_to_extension(command: AgentActionPayload) -> dict[str, Any]:
                 end_time=t_end,
                 payload={"error": ErrorCode.EXECUTION_TIMEOUT.value, "message": "Command execution exceeded 30.0s limit."},
             )
-        return {
+        to_res = {
             "status": ResponseStatus.ERROR.value,
             "message": "Execution engine frame timed out.",
             "error": {"code": ErrorCode.EXECUTION_TIMEOUT.value, "message": "Command execution exceeded 30.0s limit."},
         }
+        if intervention_notes_meta:
+            to_res["intervention_notes"] = intervention_notes_meta
+            to_res["last_intervention_notes"] = intervention_notes_meta
+        return to_res
     finally:
-        state.pending_responses.pop(cmd_id, None)
+        state.pop_pending_future(cmd_id)
+
+
+# ============================================================================
+# Atomic OODA RPC Dispatch Handlers (Spec 23)
+# ============================================================================
+
+async def observe_page(tab_group_id: int | None = None, take_screenshot: bool = False) -> dict[str, Any]:
+    state.record_activity()
+    session = state.get_session(tab_group_id)
+
+    if session.human_in_control:
+        return {
+            "status": ResponseStatus.HUMAN_LOCKED.value,
+            "url": "",
+            "title": "",
+            "viewport": {},
+            "tree_text": "",
+            "elements": [],
+            "message": "Human operator is currently in control of the browser session.",
+            "last_intervention_notes": session.last_intervention_notes,
+        }
+
+    if not state.extension_ws:
+        return {
+            "status": ResponseStatus.ERROR.value,
+            "url": "",
+            "title": "",
+            "viewport": {},
+            "tree_text": "",
+            "elements": [],
+            "message": "Extension is offline.",
+            "error": {
+                "code": ErrorCode.EXTENSION_OFFLINE.value,
+                "message": "Chrome extension is not plugged into WebSocket gateway."
+            }
+        }
+
+    if take_screenshot and not state.global_permissions.get("enable_vision", False):
+        take_screenshot = False
+
+    request_id = f"obs_{uuid.uuid4().hex[:8]}"
+    loop = asyncio.get_running_loop()
+    fut = loop.create_future()
+    session.pending_responses[request_id] = fut
+    state.pending_responses[request_id] = fut
+
+    outbound_frame = {
+        "type": WSMessageType.OBSERVE_PAGE.value,
+        "request_id": request_id,
+        "id": request_id,
+        "command_id": request_id,
+        "tab_group_id": session.tab_group_id,
+        "take_screenshot": take_screenshot,
+        "options": {"take_screenshot": take_screenshot},
+    }
+
+    try:
+        await state.extension_ws.send_text(json.dumps(outbound_frame))
+        result = await asyncio.wait_for(fut, timeout=15.0)
+
+        if isinstance(result, dict):
+            status = result.get("status", "success")
+            return {
+                "status": status,
+                "url": result.get("url", ""),
+                "title": result.get("title", ""),
+                "viewport": result.get("viewport", {}),
+                "tree_text": result.get("tree_text", result.get("treeText", "")),
+                "elements": result.get("elements", []),
+                "screenshot_path": result.get("screenshot_path", result.get("screenshotPath")),
+            }
+        return {"status": "success", "data": result}
+    except asyncio.TimeoutError:
+        return {
+            "status": ResponseStatus.ERROR.value,
+            "url": "",
+            "title": "",
+            "viewport": {},
+            "tree_text": "",
+            "elements": [],
+            "message": "Observation timed out after 15.0s limit.",
+            "error": {
+                "code": ErrorCode.EXECUTION_TIMEOUT.value,
+                "message": "observe_page exceeded 15.0s correlation limit."
+            }
+        }
+    finally:
+        state.pop_pending_future(request_id)
+
+
+async def act_element(payload: ActRequest) -> dict[str, Any]:
+    state.record_activity()
+    session = state.get_session(payload.tab_group_id)
+
+    if session.human_in_control:
+        return {
+            "status": ResponseStatus.HUMAN_LOCKED.value,
+            "action": payload.action,
+            "element_id": payload.element_id,
+            "duration_ms": 0.0,
+            "mutations_observed": 0,
+            "settle_reason": "human_locked",
+            "intervention_notes": session.last_intervention_notes,
+            "message": "Human operator is currently in control of the browser session.",
+        }
+
+    # Flaw 4 Fix: Extract intervention notes and clear cache without dropping action payload!
+    intervention_notes = None
+    if session.last_intervention_notes:
+        intervention_notes = session.last_intervention_notes
+        session.last_intervention_notes = None
+
+    if not state.extension_ws:
+        return {
+            "status": ResponseStatus.ERROR.value,
+            "action": payload.action,
+            "element_id": payload.element_id,
+            "duration_ms": 0.0,
+            "mutations_observed": 0,
+            "settle_reason": "error",
+            "intervention_notes": intervention_notes,
+            "message": "Extension is offline.",
+            "error": {
+                "code": ErrorCode.EXTENSION_OFFLINE.value,
+                "message": "Chrome extension is not plugged into WebSocket gateway."
+            }
+        }
+
+    request_id = f"act_{uuid.uuid4().hex[:8]}"
+    loop = asyncio.get_running_loop()
+    fut = loop.create_future()
+    session.pending_responses[request_id] = fut
+    state.pending_responses[request_id] = fut
+
+    outbound_frame = {
+        "type": WSMessageType.ACT_ELEMENT.value,
+        "request_id": request_id,
+        "id": request_id,
+        "command_id": request_id,
+        "tab_group_id": session.tab_group_id,
+        "payload": payload.model_dump(),
+        "action": payload.action,
+        "element_id": payload.element_id,
+        "text": payload.text,
+        "clear_first": payload.clear_first,
+        "press_enter": payload.press_enter,
+        "direction": payload.direction,
+        "amount": payload.amount,
+        "key": payload.key,
+        "wait_settle": payload.wait_settle,
+    }
+
+    t0 = time.time()
+    try:
+        await state.extension_ws.send_text(json.dumps(outbound_frame))
+        result = await asyncio.wait_for(fut, timeout=15.0)
+        dur_ms = round((time.time() - t0) * 1000.0, 2)
+
+        if isinstance(result, dict):
+            status = result.get("status", "success")
+            mutations = result.get("mutations_observed", result.get("mutations", 0))
+            reason = result.get("settle_reason", result.get("settleReason", "quiescence"))
+            res_dur = result.get("duration_ms", dur_ms)
+            return {
+                "status": status,
+                "action": payload.action,
+                "element_id": payload.element_id,
+                "duration_ms": float(res_dur),
+                "mutations_observed": int(mutations),
+                "settle_reason": str(reason),
+                "intervention_notes": intervention_notes,
+            }
+
+        return {
+            "status": "success",
+            "action": payload.action,
+            "element_id": payload.element_id,
+            "duration_ms": dur_ms,
+            "mutations_observed": 0,
+            "settle_reason": "quiescence",
+            "intervention_notes": intervention_notes,
+        }
+    except asyncio.TimeoutError:
+        dur_ms = round((time.time() - t0) * 1000.0, 2)
+        return {
+            "status": ResponseStatus.ERROR.value,
+            "action": payload.action,
+            "element_id": payload.element_id,
+            "duration_ms": dur_ms,
+            "mutations_observed": 0,
+            "settle_reason": "timeout",
+            "intervention_notes": intervention_notes,
+            "message": "Action execution timed out after 15.0s limit.",
+            "error": {
+                "code": ErrorCode.EXECUTION_TIMEOUT.value,
+                "message": "act_element exceeded 15.0s correlation limit."
+            }
+        }
+    finally:
+        state.pop_pending_future(request_id)
+
+
+async def set_intent(
+    tab_group_id: int | None = None,
+    intent: str = "",
+    subtext: str = "",
+    phase: str | None = None,
+) -> None:
+    state.record_activity()
+    session = state.get_session(tab_group_id)
+    if state.extension_ws:
+        outbound_frame = {
+            "type": "set_intent",
+            "tab_group_id": session.tab_group_id,
+            "intent": intent,
+            "subtext": subtext,
+            "phase": phase,
+        }
+        try:
+            await state.extension_ws.send_text(json.dumps(outbound_frame))
+        except Exception as e:
+            logger.warning(f"Failed to send set_intent to extension: {e}")
+
+
+@app.post("/observe")
+async def observe_endpoint(payload: ObserveRequest) -> dict[str, Any]:
+    state.record_activity()
+    return await observe_page(tab_group_id=payload.tab_group_id, take_screenshot=payload.take_screenshot)
+
+
+@app.post("/act")
+async def act_endpoint(payload: ActRequest) -> dict[str, Any]:
+    state.record_activity()
+    return await act_element(payload=payload)
+
+
+@app.post("/set_intent")
+async def set_intent_endpoint(payload: SetIntentRequest) -> dict[str, Any]:
+    state.record_activity()
+    await set_intent(
+        tab_group_id=payload.tab_group_id,
+        intent=payload.intent,
+        subtext=payload.subtext,
+        phase=payload.phase,
+    )
+    return {"status": "success"}
 
 
 @app.post("/human_release")
 async def human_release(payload: ReleasePayload) -> dict[str, Any]:
     state.record_activity()
-    state.human_in_control = False
-    state.last_intervention_notes = payload.notes if payload.notes else "Released by human operator."
-
     t_now = time.time()
-    takeover_dur_ms = 0.0
-    if state.takeover_start_time:
-        takeover_dur_ms = max(0.0, round((t_now - state.takeover_start_time) * 1000.0, 2))
-        state.takeover_start_time = None
+    notes = payload.notes if payload.notes else "Released by human operator."
 
-    logger.info(f"Human Release Endpoint -> Human In Control: {state.human_in_control}, Notes: {state.last_intervention_notes}, Duration: {takeover_dur_ms}ms")
+    if payload.tab_group_id is not None:
+        target_sessions = [state.get_session(payload.tab_group_id)]
+    else:
+        target_sessions = list(state.tab_sessions.values())
+        if not target_sessions:
+            target_sessions = [state.get_session(0)]
 
-    for gid in list(session_manager.active_sessions.keys()):
-        session_manager.log_event(
-            tab_group_id=gid,
-            event_type=SessionEventType.HUMAN_RELEASE,
-            title="Human Operator Release Handoff",
-            start_time=t_now - (takeover_dur_ms / 1000.0),
-            end_time=t_now,
-            payload={
-                "notes": state.last_intervention_notes,
-                "takeover_duration_ms": takeover_dur_ms,
-            },
-        )
+    for session in target_sessions:
+        session.human_in_control = False
+        session.last_intervention_notes = notes
+        takeover_dur_ms = 0.0
+        if session.takeover_start_time:
+            takeover_dur_ms = max(0.0, round((t_now - session.takeover_start_time) * 1000.0, 2))
+            session.takeover_start_time = None
+        logger.info(f"Human Release [Group {session.tab_group_id}] -> Human In Control: False, Notes: {notes}, Duration: {takeover_dur_ms}ms")
+
+        if session.tab_group_id in session_manager.active_sessions:
+            session_manager.log_event(
+                tab_group_id=session.tab_group_id,
+                event_type=SessionEventType.HUMAN_RELEASE,
+                title="Human Operator Release Handoff",
+                start_time=t_now - (takeover_dur_ms / 1000.0),
+                end_time=t_now,
+                payload={
+                    "notes": notes,
+                    "takeover_duration_ms": takeover_dur_ms,
+                },
+            )
 
     if state.extension_ws:
         try:
-            await state.extension_ws.send_text(json.dumps({
+            sync_payload = {
                 "type": WSMessageType.STATE_SYNC.value,
                 "human_in_control": False,
-                "notes": state.last_intervention_notes,
-            }))
+                "notes": notes,
+            }
+            if payload.tab_group_id is not None:
+                sync_payload["tab_group_id"] = payload.tab_group_id
+            await state.extension_ws.send_text(json.dumps(sync_payload))
         except Exception as e:
             logger.warning(f"Error sending state_sync on release: {e}")
 
@@ -783,33 +1161,56 @@ async def human_release(payload: ReleasePayload) -> dict[str, Any]:
 
 
 @app.post("/stop")
-async def stop_active_task() -> dict[str, Any]:
+async def stop_active_task(tab_group_id: int | None = None) -> dict[str, Any]:
     state.record_activity()
-    state.human_in_control = False
-    state.last_intervention_notes = None
-    state.takeover_start_time = None
+    if tab_group_id is not None:
+        sessions_to_stop = [state.get_session(tab_group_id)]
+    else:
+        sessions_to_stop = list(state.tab_sessions.values())
+        if not sessions_to_stop:
+            sessions_to_stop = [state.get_session(0)]
 
-    for gid in list(session_manager.active_sessions.keys()):
-        session_manager.finalize_session(
-            tab_group_id=gid,
-            status=SessionStatus.STOPPED,
-            end_reason="user_stopped",
-        )
+    for session in sessions_to_stop:
+        session.human_in_control = False
+        session.last_intervention_notes = None
+        session.takeover_start_time = None
+        for cmd_id, future in list(session.pending_responses.items()):
+            if not future.done():
+                future.set_result({"status": "aborted", "message": "Task terminated by human operator."})
+        session.pending_responses.clear()
 
-    for cmd_id, future in list(state.pending_responses.items()):
-        if not future.done():
-            future.set_result({"status": "aborted", "message": "Task terminated by human operator."})
-    state.pending_responses.clear()
+        if session.tab_group_id in session_manager.active_sessions:
+            session_manager.finalize_session(
+                tab_group_id=session.tab_group_id,
+                status=SessionStatus.STOPPED,
+                end_reason="user_stopped",
+            )
 
-    logger.info("Task aborted by user takeover stop command.")
+    if tab_group_id is None:
+        for cmd_id, future in list(state.pending_responses.items()):
+            if not future.done():
+                future.set_result({"status": "aborted", "message": "Task terminated by human operator."})
+        state.pending_responses.clear()
+
+        for gid in list(session_manager.active_sessions.keys()):
+            session_manager.finalize_session(
+                tab_group_id=gid,
+                status=SessionStatus.STOPPED,
+                end_reason="user_stopped",
+            )
+
+    logger.info(f"Task aborted by user takeover stop command (tab_group_id={tab_group_id}).")
 
     if state.extension_ws:
         try:
-            await state.extension_ws.send_text(json.dumps({
+            stop_sync = {
                 "type": WSMessageType.STATE_SYNC.value,
                 "human_in_control": False,
                 "notes": "Task terminated.",
-            }))
+            }
+            if tab_group_id is not None:
+                stop_sync["tab_group_id"] = tab_group_id
+            await state.extension_ws.send_text(json.dumps(stop_sync))
         except Exception as e:
             logger.warning(f"Error sending state_sync on stop: {e}")
 
