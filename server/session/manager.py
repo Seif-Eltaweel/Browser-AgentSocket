@@ -411,7 +411,7 @@ class StepTracker:
         title = step_title or f"Step {current:02d}: In Progress"
         try:
             import requests
-            from server.socket_launcher import resolve_server_url
+            from server.socket_launcher import resolve_server_url, get_auth_headers
             url = self.server_url or resolve_server_url()
             payload = {
                 "session_title": self.session_title,
@@ -419,7 +419,7 @@ class StepTracker:
                 "step_total": self.total_steps,
                 "step_title": title,
             }
-            resp = requests.post(f"{url}/progress", json=payload, timeout=2.0)
+            resp = requests.post(f"{url}/progress", json=payload, headers=get_auth_headers(), timeout=2.0)
             if resp.status_code == 200:
                 return resp.json()
         except Exception:

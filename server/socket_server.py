@@ -8,14 +8,16 @@ import asyncio
 import json
 import os
 import platform
+import secrets
 import signal
 import sys
 import time
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO_ROOT not in sys.path:
@@ -46,6 +48,43 @@ from server.session import session_manager
 IDLE_TIMEOUT_SECONDS = float(os.environ.get("SOCKET_IDLE_TIMEOUT", "1200"))
 PID_FILE_PATH = os.path.join(REPO_ROOT, ".socket_server.pid")
 PORT_FILE_PATH = os.path.join(REPO_ROOT, ".socket_server.port")
+TOKEN_FILE_PATH = os.path.join(REPO_ROOT, ".socket_server.token")
+AUTH_TOKEN_HEADER = "X-AgentSocket-Token"
+AUTH_TOKEN_PARAM = "token"
+
+
+def write_token_file(token: str) -> None:
+    try:
+        with open(TOKEN_FILE_PATH, "w", encoding="utf-8") as f:
+            f.write(token)
+    except Exception as e:
+        logger.warning(f"Unable to write token file: {e}")
+
+
+def remove_token_file() -> None:
+    try:
+        if os.path.exists(TOKEN_FILE_PATH):
+            os.remove(TOKEN_FILE_PATH)
+    except Exception as e:
+        logger.warning(f"Unable to remove token file: {e}")
+
+
+def get_or_generate_token() -> str:
+    env_token = os.environ.get("AGENTSOCKET_TOKEN")
+    if env_token:
+        write_token_file(env_token)
+        return env_token
+    if os.path.exists(TOKEN_FILE_PATH):
+        try:
+            with open(TOKEN_FILE_PATH, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+                if content:
+                    return content
+        except Exception:
+            pass
+    token = secrets.token_hex(32)
+    write_token_file(token)
+    return token
 
 
 class SystemState:
@@ -59,6 +98,9 @@ class SystemState:
         self.watchdog_task: asyncio.Task | None = None
         self.agent_name: str | None = None
         self.group_color: str | None = None
+        self.server_token: str = get_or_generate_token()
+        self.session_permissions: dict[str, dict[str, bool]] = {}
+        self.global_permissions: dict[str, bool] = {"enable_subskills": True, "enable_vision": False}
 
     def record_activity(self) -> None:
         self.last_activity_time = time.time()
@@ -147,6 +189,9 @@ async def lifespan(app: FastAPI):
     # Startup
     write_pid_file()
     write_port_file()
+    if not state.server_token:
+        state.server_token = get_or_generate_token()
+    write_token_file(state.server_token)
     state.record_activity()
     state.watchdog_task = asyncio.create_task(idle_watchdog_loop())
 
@@ -167,17 +212,48 @@ async def lifespan(app: FastAPI):
 
     remove_pid_file()
     remove_port_file()
+    remove_token_file()
     logger.info("Server gateway shutdown completed cleanly.")
 
 
 app = FastAPI(title="AgentSocket Server Gateway", lifespan=lifespan)
 
-# Enable global cross-origin rules
+# Ephemeral Token HTTP Authentication Middleware (Spec 22)
+@app.middleware("http")
+async def verify_gateway_token(request: Request, call_next):
+    # CORS preflight requests must bypass auth check
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
+    token = request.headers.get("x-agentsocket-token") or request.query_params.get("token")
+    if not state.server_token or token != state.server_token:
+        return JSONResponse(
+            status_code=401,
+            content={
+                "status": "error",
+                "error": {
+                    "code": ErrorCode.UNAUTHORIZED.value,
+                    "message": "Invalid or missing gateway token. Provide X-AgentSocket-Token header or ?token= query parameter.",
+                },
+            },
+        )
+
+    return await call_next(request)
+
+
+ALLOWED_ORIGINS = [
+    "http://127.0.0.1:8000",
+    "http://localhost:8000",
+    "chrome-extension://*",
+]
+
+# Strict CORS Whitelisting (Spec 22)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_origin_regex=r"^(http://(127\.0\.0\.1|localhost)(:\d+)?|chrome-extension://.*)$",
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -312,6 +388,13 @@ def get_subskill(name: str) -> dict[str, Any]:
 @app.post("/subskills/borrow")
 def borrow_subskill(payload: BorrowSubskillPayload) -> dict[str, Any]:
     state.record_activity()
+    perms = state.session_permissions.get(payload.session_title, state.global_permissions)
+    if not perms.get("enable_subskills", True):
+        return {
+            "status": "denied",
+            "error": {"code": "PERMISSION_DENIED", "message": "Subskills and SOP playbooks disabled by user for this session."},
+            "message": "Subskills and SOP playbooks disabled by user for this session."
+        }
     return session_manager.borrow_subskill(
         name=payload.name,
         target_session_id_or_title_or_path=payload.session_title,
@@ -323,6 +406,12 @@ def borrow_subskill(payload: BorrowSubskillPayload) -> dict[str, Any]:
 @app.post("/subskills/register")
 def register_subskill(payload: RegisterSubskillPayload) -> dict[str, Any]:
     state.record_activity()
+    if not state.global_permissions.get("enable_subskills", True):
+        return {
+            "status": "denied",
+            "error": {"code": "PERMISSION_DENIED", "message": "Subskills and SOP playbooks disabled by user."},
+            "message": "Subskills and SOP playbooks disabled by user."
+        }
     return session_manager.register_subskill(
         session_path=payload.session_path,
         name=payload.name,
@@ -372,6 +461,12 @@ def run_adhoc(payload: RunAdhocPayload) -> dict[str, Any]:
 
 @app.websocket("/ws/extension")
 async def extension_endpoint(websocket: WebSocket) -> None:
+    token = websocket.headers.get("x-agentsocket-token") or websocket.query_params.get("token")
+    if not state.server_token or token != state.server_token:
+        logger.warning("Rejecting unauthenticated WebSocket connection attempt on /ws/extension.")
+        await websocket.close(code=1008, reason="Unauthorized: invalid or missing gateway token")
+        return
+
     await websocket.accept()
     state.extension_ws = websocket
     state.record_activity()
@@ -384,6 +479,16 @@ async def extension_endpoint(websocket: WebSocket) -> None:
             msg_type = message.get("type")
 
             if msg_type == WSMessageType.PING.value or msg_type == "ping":
+                continue
+
+            if msg_type in (WSMessageType.AUTH_RESPONSE.value, "auth_response", "AUTH_RESPONSE"):
+                auth_status = message.get("status")
+                perms = message.get("permissions") or {}
+                tab_group_name = message.get("tab_group_name") or message.get("session_title")
+                if tab_group_name:
+                    state.session_permissions[tab_group_name] = perms
+                state.global_permissions = perms
+                logger.info(f"Extension Consent Handshake -> status: {auth_status}, permissions: {perms}")
                 continue
 
             if msg_type == WSMessageType.STATE_CHANGE.value or msg_type == "state_change":
@@ -402,10 +507,17 @@ async def extension_endpoint(websocket: WebSocket) -> None:
                             state.last_intervention_notes = message.get("notes")
                     logger.info(f"State Sync -> Human In Control: {state.human_in_control}")
 
-            elif msg_type == WSMessageType.COMMAND_RESPONSE.value or msg_type == "command_response":
-                cmd_id = message.get("command_id")
+            elif msg_type in (
+                WSMessageType.COMMAND_RESPONSE.value,
+                "command_response",
+                WSMessageType.OBSERVE_RESPONSE.value,
+                "observe_response",
+                WSMessageType.ACT_RESPONSE.value,
+                "act_response",
+            ):
+                cmd_id = message.get("command_id") or message.get("id")
                 if cmd_id in state.pending_responses:
-                    state.pending_responses[cmd_id].set_result(message.get("payload"))
+                    state.pending_responses[cmd_id].set_result(message.get("payload") if "payload" in message else message)
 
     except WebSocketDisconnect:
         logger.info("Chrome Extension unplugged from AgentSocket bridge.")
@@ -439,6 +551,20 @@ async def execute_to_extension(command: AgentActionPayload) -> dict[str, Any]:
             "message": injected_context,
             "instructions": "Human operator handoff caught. Adapt steps using log data.",
         }
+
+    # VISION PERMISSION ENFORCEMENT (Spec 22)
+    act_val = command.action_type.value if hasattr(command.action_type, "value") else str(command.action_type)
+    if act_val in (ActionType.BROWSER_SCREENSHOT.value, "browser_screenshot"):
+        perms = state.session_permissions.get(session_title, state.global_permissions)
+        if not perms.get("enable_vision", False):
+            return {
+                "status": "denied",
+                "error": {
+                    "code": "VISION_DISABLED",
+                    "message": "Screenshot blocked: 'enable_vision' is disabled in extension consent settings."
+                },
+                "message": "Vision disabled by user"
+            }
 
     # PRIVACY TRIGGER CHECK
     sensitive_keywords = [

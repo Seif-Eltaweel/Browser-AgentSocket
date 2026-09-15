@@ -58,6 +58,7 @@ server/logs/
 *.jsonl
 .socket_server.pid
 *.pid
+.socket_server.token
 *TIMELINE*.md
 *timeline*.md
 

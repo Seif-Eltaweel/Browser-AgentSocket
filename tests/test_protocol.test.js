@@ -18,13 +18,27 @@ assert.strictEqual(protocol.MessageTypes.SHOW_GLOW, 'show_glow');
 assert.strictEqual(protocol.MessageTypes.UPDATE_PROGRESS, 'update_progress');
 assert.strictEqual(protocol.MessageTypes.OBSERVE_PAGE, 'observe_page');
 assert.strictEqual(protocol.MessageTypes.OBSERVE_RESPONSE, 'observe_response');
+assert.strictEqual(protocol.MessageTypes.ACT_ELEMENT, 'act_element');
+assert.strictEqual(protocol.MessageTypes.ACT_RESPONSE, 'act_response');
+assert.strictEqual(protocol.MessageTypes.AUTH_REQUEST, 'auth_request');
+assert.strictEqual(protocol.MessageTypes.AUTH_RESPONSE, 'auth_response');
 console.log('✓ MessageTypes verified.');
 
 // 2. Validate ActionTypes
 assert.strictEqual(protocol.ActionTypes.NAVIGATE, 'navigate');
 assert.strictEqual(protocol.ActionTypes.EXECUTE_JS, 'execute_js');
 assert.strictEqual(protocol.ActionTypes.TASK_COMPLETE, 'task_complete');
+assert.strictEqual(protocol.ActionTypes.OBSERVE_PAGE, 'observe_page');
+assert.strictEqual(protocol.ActionTypes.ACT_ELEMENT, 'act_element');
+assert.strictEqual(protocol.ActionTypes.BROWSER_SCREENSHOT, 'browser_screenshot');
 console.log('✓ ActionTypes verified.');
+
+// 2.1 Validate Security Constants (Spec 22)
+assert.strictEqual(protocol.AUTH_TOKEN_HEADER, 'X-AgentSocket-Token');
+assert.strictEqual(protocol.AUTH_TOKEN_PARAM, 'token');
+assert.strictEqual(protocol.SecurityHeaders.AUTH_TOKEN_HEADER, 'X-AgentSocket-Token');
+assert.strictEqual(protocol.SecurityHeaders.AUTH_TOKEN_PARAM, 'token');
+console.log('✓ SecurityHeaders verified.');
 
 // 3. Validate Response Envelope creation
 const successEnvelope = protocol.createResponseEnvelope('success', { tabId: 101 });

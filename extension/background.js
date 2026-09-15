@@ -18,6 +18,7 @@ const AT = ActionTypes;
 let activeSockets = {}; // key: serverId, value: ResilientSocket
 let humanInControl = false;
 const authorizedSessions = new Set(); // In-memory session-scoped authorization
+const sessionPermissions = new Map(); // sessionTitle -> { enable_subskills, enable_vision }
 let pendingAuthResolve = null;
 
 // Active tasks session tracking: sessionTitle -> { groupColor, tabId, groupId, active }
@@ -67,7 +68,12 @@ class ResilientSocket {
         console.log(`[Hub] Connecting to ${this.server.name} at ${this.server.url}...`);
 
         try {
-            this.ws = new WebSocket(this.server.url);
+            let wsUrl = this.server.url;
+            if (this.server.token && !wsUrl.includes("token=")) {
+                const sep = wsUrl.includes("?") ? "&" : "?";
+                wsUrl = `${wsUrl}${sep}token=${encodeURIComponent(this.server.token)}`;
+            }
+            this.ws = new WebSocket(wsUrl);
         } catch (err) {
             console.warn(`[Hub] WebSocket init error for ${this.server.name}:`, err);
             this.scheduleReconnect();
@@ -94,6 +100,20 @@ class ResilientSocket {
                 const data = JSON.parse(event.data);
                 if (data.type === MT.EXECUTE_ACTION) {
                     await this.onAction(this.server, data, this);
+                } else if (data.type === MT.OBSERVE_PAGE || data.type === "observe_page") {
+                    const result = await handleObservePage(data, data.session_title);
+                    this.send({
+                        type: MT.OBSERVE_RESPONSE,
+                        command_id: data.id || data.command_id,
+                        payload: result
+                    });
+                } else if (data.type === MT.ACT_ELEMENT || data.type === "act_element") {
+                    const result = await handleActElement(data, data.session_title);
+                    this.send({
+                        type: MT.ACT_RESPONSE,
+                        command_id: data.id || data.command_id,
+                        payload: result
+                    });
                 } else if (data.type === MT.STATE_SYNC) {
                     this.onStateSync(this.server, data);
                 } else if (data.type === MT.UPDATE_PROGRESS) {
@@ -315,11 +335,26 @@ function hitServerEndpoint(endpoint, payload = {}) {
         servers.forEach(server => {
             if (server.enabled) {
                 let httpUrl = server.url.replace(/^ws/, "http");
-                httpUrl = httpUrl.replace(/\/ws\/extension\/?$/, "");
+                let serverToken = server.token || "";
+                try {
+                    const parsedUrl = new URL(httpUrl);
+                    if (!serverToken && parsedUrl.searchParams.has("token")) {
+                        serverToken = parsedUrl.searchParams.get("token");
+                    }
+                    parsedUrl.search = "";
+                    httpUrl = parsedUrl.toString().replace(/\/ws\/extension\/?$/, "");
+                } catch (e) {
+                    httpUrl = httpUrl.replace(/\/ws\/extension\/?$/, "");
+                }
+
+                const headers = { 'Content-Type': 'application/json' };
+                if (serverToken) {
+                    headers[typeof SecurityHeaders !== "undefined" ? SecurityHeaders.AUTH_TOKEN_HEADER : 'X-AgentSocket-Token'] = serverToken;
+                }
 
                 fetch(`${httpUrl}${endpoint}`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: headers,
                     body: JSON.stringify(payload)
                 })
                 .then(res => res.json())
@@ -358,12 +393,34 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         case MT.AUTH_STATUS_CHANGED: {
             const isAuthed = !!message.authorized;
             const sessionTitle = message.session_title || "AgentSocket Task";
-            console.log(`[Auth] Authorization state changed for "${sessionTitle}":`, isAuthed);
+            const perms = message.permissions || { enable_subskills: true, enable_vision: false };
+            const token = message.token || "";
+
+            console.log(`[Auth] Authorization state changed for "${sessionTitle}":`, isAuthed, perms);
             if (isAuthed) {
                 authorizedSessions.add(sessionTitle);
+                sessionPermissions.set(sessionTitle, perms);
             } else {
                 authorizedSessions.delete(sessionTitle);
+                sessionPermissions.delete(sessionTitle);
             }
+
+            // Handshake Spec 22 Section 4.2: broadcast AUTH_RESPONSE to active gateway sockets
+            const activeSess = activeSessions.get(sessionTitle);
+            const authResponseMsg = {
+                type: MT.AUTH_RESPONSE || "auth_response",
+                status: isAuthed ? "approved" : "denied",
+                token: token,
+                tab_group_id: activeSess ? activeSess.groupId : null,
+                tab_group_name: sessionTitle,
+                permissions: perms
+            };
+            for (const id in activeSockets) {
+                if (activeSockets[id] && activeSockets[id].isOpen && activeSockets[id].isOpen()) {
+                    activeSockets[id].send(authResponseMsg);
+                }
+            }
+
             if (pendingAuthResolve) {
                 pendingAuthResolve(isAuthed);
                 pendingAuthResolve = null;
@@ -487,12 +544,17 @@ async function ensureAuthorized(sessionTitle, server) {
         return true;
     }
 
-    // Auto-authorize localhost connections without modal prompt interruption (Spec 17 Sec 3.2)
-    const isLocal = !server || !server.url || server.url.includes("127.0.0.1") || server.url.includes("localhost");
-    if (isLocal) {
-        authorizedSessions.add(title);
-        console.log(`[Auth] Auto-authorized localhost session: "${title}"`);
-        return true;
+    // Extract ephemeral server token if available (Spec 22)
+    let serverToken = "";
+    if (server) {
+        if (server.token) {
+            serverToken = server.token;
+        } else if (server.url) {
+            try {
+                const parsedUrl = new URL(server.url);
+                serverToken = parsedUrl.searchParams.get("token") || "";
+            } catch (e) {}
+        }
     }
 
     // 1. Create native OS / Chrome desktop notification alerting the user
@@ -506,8 +568,8 @@ async function ensureAuthorized(sessionTitle, server) {
         requireInteraction: true
     });
 
-    // 2. Open auth.html in a focused active tab and focus window
-    const authUrl = chrome.runtime.getURL(`auth.html?session=${encodeURIComponent(title)}`);
+    // 2. Open auth.html in a focused active tab and focus window (Spec 22: with token & session)
+    const authUrl = chrome.runtime.getURL(`auth.html?session=${encodeURIComponent(title)}&token=${encodeURIComponent(serverToken)}`);
     chrome.tabs.create({ url: authUrl, active: true }, (tab) => {
         if (tab && tab.windowId) {
             chrome.windows.update(tab.windowId, { focused: true });
@@ -583,8 +645,106 @@ async function handleSocketAction(command, server) {
             return await handleExecuteJS(command.target_data, sessionTitle, groupColor);
         case AT.TASK_COMPLETE:
             return await handleTaskComplete(sessionTitle);
+        case AT.OBSERVE_PAGE:
+        case "observe_page":
+            return await handleObservePage(command, sessionTitle);
+        case AT.ACT_ELEMENT:
+        case "act_element":
+            return await handleActElement(command, sessionTitle);
+        case AT.BROWSER_SCREENSHOT:
+        case "browser_screenshot":
+            return await handleScreenshot(command, sessionTitle);
         default:
             return { status: "error", message: `Unknown action capability: ${command.action_type}` };
+    }
+}
+
+async function getActiveTabForSession(sessionTitle) {
+    const sess = activeSessions.get(sessionTitle);
+    if (sess && sess.tabId) {
+        try {
+            const tab = await chrome.tabs.get(sess.tabId);
+            if (tab && !tab.discarded) {
+                return tab.id;
+            }
+        } catch (e) {}
+    }
+
+    if (sess && sess.groupId) {
+        try {
+            const tabs = await chrome.tabs.query({ groupId: sess.groupId, active: true });
+            if (tabs && tabs.length > 0) return tabs[0].id;
+            const groupTabs = await chrome.tabs.query({ groupId: sess.groupId });
+            if (groupTabs && groupTabs.length > 0) return groupTabs[0].id;
+        } catch (e) {}
+    }
+
+    try {
+        const activeTabs = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (activeTabs && activeTabs.length > 0) return activeTabs[0].id;
+    } catch (e) {}
+
+    return null;
+}
+
+async function handleObservePage(command, sessionTitle) {
+    const tabId = await getActiveTabForSession(sessionTitle);
+    if (!tabId) {
+        return { status: "error", message: "No active tab found for session observation." };
+    }
+    try {
+        const response = await chrome.tabs.sendMessage(tabId, {
+            type: MT.OBSERVE_PAGE || "observe_page",
+            options: command.options || (typeof command.target_data === "object" ? command.target_data : {})
+        });
+        return response || { status: "success", elements: [] };
+    } catch (err) {
+        return { status: "error", message: `Failed to observe page: ${err.message}` };
+    }
+}
+
+async function handleActElement(command, sessionTitle) {
+    const tabId = await getActiveTabForSession(sessionTitle);
+    if (!tabId) {
+        return { status: "error", message: "No active tab found for acting on element." };
+    }
+    try {
+        const payload = command.payload || (typeof command.target_data === "object" ? command.target_data : command);
+        const response = await chrome.tabs.sendMessage(tabId, {
+            type: MT.ACT_ELEMENT || "act_element",
+            payload: payload
+        });
+        return response || { status: "success" };
+    } catch (err) {
+        return { status: "error", message: `Failed to act on element: ${err.message}` };
+    }
+}
+
+async function handleScreenshot(command, sessionTitle) {
+    const perms = sessionPermissions.get(sessionTitle) || { enable_vision: false };
+    if (!perms.enable_vision) {
+        return {
+            status: "denied",
+            message: "Vision disabled by user"
+        };
+    }
+
+    try {
+        const dataUrl = await new Promise((resolve, reject) => {
+            chrome.tabs.captureVisibleTab(null, { format: "png" }, (dataUrl) => {
+                if (chrome.runtime.lastError) {
+                    reject(new Error(chrome.runtime.lastError.message));
+                } else {
+                    resolve(dataUrl);
+                }
+            });
+        });
+        return {
+            status: "success",
+            data: dataUrl
+        };
+    } catch (err) {
+        return { status: "error", message: `Screenshot capture failed: ${err.message}` };
     }
 }
 

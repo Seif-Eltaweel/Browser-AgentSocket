@@ -42,7 +42,33 @@ from server.session import (
 EXTENSION_DIR = os.path.join(REPO_ROOT, "extension")
 PID_FILE_PATH = os.path.join(REPO_ROOT, ".socket_server.pid")
 PORT_FILE_PATH = os.path.join(REPO_ROOT, ".socket_server.port")
+TOKEN_FILE_PATH = os.path.join(REPO_ROOT, ".socket_server.token")
 DEFAULT_SERVER_URL = "http://127.0.0.1:8000"
+AUTH_TOKEN_HEADER = "X-AgentSocket-Token"
+
+
+def get_gateway_token() -> str | None:
+    """Reads the ephemeral gateway token from file or environment."""
+    env_tok = os.environ.get("AGENTSOCKET_TOKEN")
+    if env_tok:
+        return env_tok
+    if os.path.exists(TOKEN_FILE_PATH):
+        try:
+            with open(TOKEN_FILE_PATH, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+                if content:
+                    return content
+        except Exception:
+            pass
+    return None
+
+
+def get_auth_headers() -> dict[str, str]:
+    """Constructs headers including X-AgentSocket-Token if available."""
+    token = get_gateway_token()
+    if token:
+        return {AUTH_TOKEN_HEADER: token}
+    return {}
 
 # Named platform-specific subprocess creation flags
 CREATE_NO_WINDOW = 0x08000000
@@ -208,7 +234,7 @@ def find_chrome_path() -> str | None:
 def is_server_running(server_url: str = DEFAULT_SERVER_URL) -> bool:
     """Checks if the FastAPI gateway server is responding."""
     try:
-        resp = requests.get(f"{server_url}/status", timeout=1.5)
+        resp = requests.get(f"{server_url}/status", headers=get_auth_headers(), timeout=1.5)
         return resp.status_code == 200
     except Exception:
         return False
@@ -218,7 +244,7 @@ def get_gateway_status(server_url: str = DEFAULT_SERVER_URL) -> dict[str, Any]:
     """Fetches the current status payload from the gateway server."""
     clean_stale_pid_file()
     try:
-        resp = requests.get(f"{server_url}/status", timeout=2.0)
+        resp = requests.get(f"{server_url}/status", headers=get_auth_headers(), timeout=2.0)
         if resp.status_code == 200:
             return resp.json()
         return {"status": "error", "message": f"HTTP {resp.status_code}"}
@@ -343,7 +369,7 @@ def execute_action(
         "session_title": session_title,
     }
     try:
-        resp = requests.post(f"{server_url}/execute", json=payload, timeout=35.0)
+        resp = requests.post(f"{server_url}/execute", json=payload, headers=get_auth_headers(), timeout=35.0)
         return resp.json()
     except Exception as e:
         return {
@@ -369,7 +395,7 @@ def send_progress(
         "step_title": step_title,
     }
     try:
-        resp = requests.post(f"{url}/progress", json=payload, timeout=5.0)
+        resp = requests.post(f"{url}/progress", json=payload, headers=get_auth_headers(), timeout=5.0)
         return resp.json()
     except Exception as e:
         return {
@@ -383,7 +409,7 @@ def release_takeover(notes: str = "", server_url: str = DEFAULT_SERVER_URL) -> d
     """Releases human intervention lockout."""
     ensure_ready(server_url, auto_launch_chrome=False)
     try:
-        resp = requests.post(f"{server_url}/human_release", json={"notes": notes}, timeout=5.0)
+        resp = requests.post(f"{server_url}/human_release", json={"notes": notes}, headers=get_auth_headers(), timeout=5.0)
         return resp.json()
     except Exception as e:
         return {
@@ -397,7 +423,7 @@ def stop_tasks(server_url: str = DEFAULT_SERVER_URL) -> dict[str, Any]:
     """Stops active tasks and resets state."""
     ensure_ready(server_url, auto_launch_chrome=False)
     try:
-        resp = requests.post(f"{server_url}/stop", timeout=5.0)
+        resp = requests.post(f"{server_url}/stop", headers=get_auth_headers(), timeout=5.0)
         return resp.json()
     except Exception as e:
         return {
@@ -455,7 +481,7 @@ def query_history(
             params = {"query": query_hint, "limit": limit}
             if month:
                 params["month"] = month
-            resp = requests.get(f"{server_url}/history", params=params, timeout=3.0)
+            resp = requests.get(f"{server_url}/history", params=params, headers=get_auth_headers(), timeout=3.0)
             if resp.status_code == 200:
                 return resp.json()
         except Exception:
@@ -467,7 +493,7 @@ def get_session_details(session_path: str, server_url: str = DEFAULT_SERVER_URL)
     """Retrieves full chronological events thread for a session."""
     if is_server_running(server_url):
         try:
-            resp = requests.get(f"{server_url}/session/details", params={"path": session_path}, timeout=3.0)
+            resp = requests.get(f"{server_url}/session/details", params={"path": session_path}, headers=get_auth_headers(), timeout=3.0)
             if resp.status_code == 200:
                 return resp.json()
         except Exception:
@@ -479,7 +505,7 @@ def get_session_artifact(session_path: str, artifact_name: str, server_url: str 
     """Retrieves an offloaded payload or artifact path."""
     if is_server_running(server_url):
         try:
-            resp = requests.get(f"{server_url}/session/artifact", params={"path": session_path, "name": artifact_name}, timeout=3.0)
+            resp = requests.get(f"{server_url}/session/artifact", params={"path": session_path, "name": artifact_name}, headers=get_auth_headers(), timeout=3.0)
             if resp.status_code == 200:
                 return resp.json()
         except Exception:
@@ -491,7 +517,7 @@ def get_session_document(session_path: str, server_url: str = DEFAULT_SERVER_URL
     """Generates and retrieves the full consolidated session document."""
     if is_server_running(server_url):
         try:
-            resp = requests.get(f"{server_url}/session/document", params={"path": session_path}, timeout=5.0)
+            resp = requests.get(f"{server_url}/session/document", params={"path": session_path}, headers=get_auth_headers(), timeout=5.0)
             if resp.status_code == 200:
                 data = resp.json()
                 return data.get("document_markdown", "")
@@ -504,7 +530,7 @@ def get_session_thread(session_path: str, server_url: str = DEFAULT_SERVER_URL) 
     """Generates and retrieves the dedicated standalone thread markdown (THREAD.md)."""
     if is_server_running(server_url):
         try:
-            resp = requests.get(f"{server_url}/session/thread", params={"path": session_path}, timeout=5.0)
+            resp = requests.get(f"{server_url}/session/thread", params={"path": session_path}, headers=get_auth_headers(), timeout=5.0)
             if resp.status_code == 200:
                 data = resp.json()
                 return data.get("thread_markdown", "")
@@ -534,7 +560,7 @@ def list_subskills(
                 params["query"] = query
             if tags:
                 params["tags"] = tags
-            resp = requests.get(f"{server_url}/subskills", params=params, timeout=3.0)
+            resp = requests.get(f"{server_url}/subskills", params=params, headers=get_auth_headers(), timeout=3.0)
             if resp.status_code == 200:
                 return resp.json()
         except Exception:
@@ -547,7 +573,7 @@ def get_subskill(name: str, server_url: str = DEFAULT_SERVER_URL) -> dict[str, A
     """Retrieves detailed subskill info including playbook markdown."""
     if is_server_running(server_url):
         try:
-            resp = requests.get(f"{server_url}/subskills/{name}", timeout=3.0)
+            resp = requests.get(f"{server_url}/subskills/{name}", headers=get_auth_headers(), timeout=3.0)
             if resp.status_code == 200:
                 data = resp.json()
                 if data.get("status") == "success":
@@ -573,7 +599,7 @@ def borrow_subskill(
                 "tab_group_id": tab_group_id,
                 "input_file_path": input_file_path,
             }
-            resp = requests.post(f"{server_url}/subskills/borrow", json=payload, timeout=8.0)
+            resp = requests.post(f"{server_url}/subskills/borrow", json=payload, headers=get_auth_headers(), timeout=8.0)
             if resp.status_code == 200:
                 return resp.json()
         except Exception:
@@ -608,7 +634,7 @@ def register_subskill(
                 "adhoc_tools": adhoc_tools,
                 "subskill_markdown": subskill_markdown,
             }
-            resp = requests.post(f"{server_url}/subskills/register", json=payload, timeout=8.0)
+            resp = requests.post(f"{server_url}/subskills/register", json=payload, headers=get_auth_headers(), timeout=8.0)
             if resp.status_code == 200:
                 return resp.json()
         except Exception:
@@ -631,7 +657,7 @@ def list_adhocs(server_url: str = DEFAULT_SERVER_URL) -> list[dict[str, Any]]:
     """Lists universal shared adhoc tools from the central vault."""
     if is_server_running(server_url):
         try:
-            resp = requests.get(f"{server_url}/adhocs", timeout=5.0)
+            resp = requests.get(f"{server_url}/adhocs", headers=get_auth_headers(), timeout=5.0)
             if resp.status_code == 200:
                 return resp.json()
         except Exception:
@@ -655,7 +681,7 @@ def promote_adhoc(
                 "target": target,
                 "subskill_name": subskill_name,
             }
-            resp = requests.post(f"{server_url}/adhocs/promote", json=payload, timeout=8.0)
+            resp = requests.post(f"{server_url}/adhocs/promote", json=payload, headers=get_auth_headers(), timeout=8.0)
             if resp.status_code == 200:
                 return resp.json()
         except Exception:
@@ -679,7 +705,7 @@ def resolve_adhoc(
             params = {"tool_name": tool_name}
             if session_path:
                 params["session_path"] = session_path
-            resp = requests.get(f"{server_url}/adhocs/resolve", params=params, timeout=5.0)
+            resp = requests.get(f"{server_url}/adhocs/resolve", params=params, headers=get_auth_headers(), timeout=5.0)
             if resp.status_code == 200:
                 return resp.json()
         except Exception:
@@ -701,7 +727,7 @@ def run_adhoc(
                 "session_path": session_path,
                 "args": args or [],
             }
-            resp = requests.post(f"{server_url}/adhocs/run", json=payload, timeout=65.0)
+            resp = requests.post(f"{server_url}/adhocs/run", json=payload, headers=get_auth_headers(), timeout=65.0)
             if resp.status_code == 200:
                 return resp.json()
         except Exception:

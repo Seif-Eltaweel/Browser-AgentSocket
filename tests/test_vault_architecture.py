@@ -17,7 +17,7 @@ from server.models import (
     SubskillModel,
 )
 from server.session_manager import SessionManager
-from server.socket_server import app
+from server.socket_server import app, state
 
 
 class TestVaultArchitecture(unittest.TestCase):
@@ -43,6 +43,8 @@ class TestVaultArchitecture(unittest.TestCase):
             adhocs_dir=self.adhocs_dir,
         )
         self.client = TestClient(app)
+        self.client.headers.update({"X-AgentSocket-Token": state.server_token})
+        state.global_permissions["enable_subskills"] = True
 
     def tearDown(self):
         shutil.rmtree(self.temp_dir, ignore_errors=True)

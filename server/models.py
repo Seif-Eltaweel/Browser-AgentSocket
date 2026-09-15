@@ -16,6 +16,9 @@ class ActionType(str, Enum):
     NAVIGATE = "navigate"
     EXECUTE_JS = "execute_js"
     TASK_COMPLETE = "task_complete"
+    OBSERVE_PAGE = "observe_page"
+    ACT_ELEMENT = "act_element"
+    BROWSER_SCREENSHOT = "browser_screenshot"
 
 #websocket messages
 class WSMessageType(str, Enum):
@@ -25,6 +28,12 @@ class WSMessageType(str, Enum):
     STATE_SYNC = "state_sync"
     UPDATE_PROGRESS = "update_progress"
     PING = "ping"
+    OBSERVE_PAGE = "observe_page"
+    OBSERVE_RESPONSE = "observe_response"
+    ACT_ELEMENT = "act_element"
+    ACT_RESPONSE = "act_response"
+    AUTH_REQUEST = "auth_request"
+    AUTH_RESPONSE = "auth_response"
 
 # who is in control 
 class ControlMode(str, Enum):
@@ -47,8 +56,23 @@ class ErrorCode(str, Enum):
     UNKNOWN_ACTION = "UNKNOWN_ACTION"
     CDP_ERROR = "CDP_ERROR"
     AUTH_REQUIRED = "AUTH_REQUIRED"
+    UNAUTHORIZED = "UNAUTHORIZED"
     TASK_ABORTED = "TASK_ABORTED"
     INTERNAL_ERROR = "INTERNAL_ERROR"
+
+
+class ConsentPermissions(BaseModel):
+    enable_subskills: bool = Field(default=True, description="Enable reference and creation of subskills SOPs")
+    enable_vision: bool = Field(default=False, description="Enable viewport screenshot captures")
+
+
+class AuthResponsePayload(BaseModel):
+    type: str = Field(default="auth_response", description="Message type")
+    status: str = Field(..., description="Approval status: 'approved' or 'denied'")
+    token: str = Field(..., description="Verified gateway token")
+    tab_group_id: int | None = Field(default=None, description="Active tab group ID")
+    tab_group_name: str | None = Field(default=None, description="Active tab group title")
+    permissions: ConsentPermissions = Field(default_factory=ConsentPermissions, description="Privacy and capability toggles")
 
 
 class AgentActionPayload(BaseModel):

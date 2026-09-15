@@ -126,6 +126,79 @@
       background: var(--accent-blue);
     }
 
+    .token-container {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 8px 12px;
+      margin-bottom: 16px;
+      background: #141414;
+      border: 1px solid var(--border-subtle);
+      border-radius: 6px;
+      font-size: 11px;
+    }
+
+    .token-label {
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    .token-code {
+      font-family: monospace;
+      color: #38bdf8;
+      background: #1e293b;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 11px;
+      max-width: 220px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .permissions-container {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-bottom: 20px;
+      text-align: left;
+      background: var(--bg-hover);
+      padding: 12px;
+      border-radius: 6px;
+      border: 1px solid var(--border-subtle);
+    }
+
+    .perm-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    .perm-row input[type="checkbox"] {
+      margin-top: 2px;
+      cursor: pointer;
+      accent-color: var(--accent-blue);
+    }
+
+    .perm-label {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .perm-label strong {
+      color: var(--text-main);
+      font-size: 12px;
+    }
+
+    .perm-label small {
+      color: var(--text-muted);
+      font-size: 11px;
+    }
+
     .btn-deny:hover {
       background: var(--bg-hover);
       border-color: var(--border-hover);
@@ -145,6 +218,29 @@
       An external Agent is attempting to establish a local automation session for <strong id="sessionTitleDesc">this task</strong>. 
       Granting authorization will allow this agent to automate web pages inside its dedicated tab group.
     </p>
+
+    <div class="token-container">
+      <span class="token-label">Gateway Token:</span>
+      <code id="tokenDisplay" class="token-code" title="Ephemeral Gateway Token">verifying...</code>
+    </div>
+
+    <div class="permissions-container">
+      <label class="perm-row">
+        <input type="checkbox" id="enableSubskills" checked />
+        <span class="perm-label">
+          <strong>Subskills &amp; SOP Playbooks</strong>
+          <small>Allow agent to reference and record repeatable workflows</small>
+        </span>
+      </label>
+      <label class="perm-row">
+        <input type="checkbox" id="enableVision" />
+        <span class="perm-label">
+          <strong>Vision &amp; Screenshots</strong>
+          <small>Allow agent to capture viewport screenshots</small>
+        </span>
+      </label>
+    </div>
+
     <div class="btn-container">
       <button id="denyBtn" class="btn btn-deny">Deny</button>
       <button id="grantBtn" class="btn btn-grant">Grant Authorization</button>

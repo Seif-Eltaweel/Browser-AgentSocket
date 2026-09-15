@@ -13,6 +13,7 @@ class TestProgressEndpoint(unittest.TestCase):
 
     def setUp(self):
         self.client = TestClient(app)
+        self.client.headers.update({"X-AgentSocket-Token": state.server_token})
         state.extension_ws = None
         state.pending_responses.clear()
 

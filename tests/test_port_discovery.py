@@ -9,7 +9,8 @@ from server.socket_launcher import (
     PORT_FILE_PATH,
     resolve_server_url,
     clean_stale_port_file,
-    send_progress
+    send_progress,
+    get_auth_headers,
 )
 from server.socket_server import write_port_file, remove_port_file
 
@@ -76,6 +77,7 @@ class TestPortDiscovery(unittest.TestCase):
                 "step_total": 10,
                 "step_title": "Halfway there"
             },
+            headers=get_auth_headers(),
             timeout=5.0
         )
 
