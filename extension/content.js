@@ -8,7 +8,9 @@ const MT = (typeof MessageTypes !== "undefined") ? MessageTypes : (window.AgentS
     PAGE_TAKEOVER: "page_takeover",
     PAGE_STOP: "page_stop",
     PAGE_RESUME: "page_resume",
-    UPDATE_PROGRESS: "update_progress"
+    UPDATE_PROGRESS: "update_progress",
+    SET_INTENT: "set_intent",
+    SET_MILESTONE: "set_milestone"
 });
 
 let currentSessionTitle = "AgentSocket Task";
@@ -16,6 +18,13 @@ let currentGroupColor = "purple";
 let isShieldActive = false;
 let isTakeoverActive = false;
 let tooltipTimeout = null;
+
+// Spec 21: Live Intent & Action Ticker State
+let currentIntent = "Searching rentals in Cairo...";
+let currentActionSubtext = "Initializing OODA observer...";
+let currentPhaseBadge = "";
+let isHudMinimized = false;
+
 let currentProgress = {
     percent: 0,
     currentStep: 0,
@@ -203,6 +212,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 .then(res => sendResponse(res))
                 .catch(err => sendResponse({ status: "error", message: err.message }));
             return true;
+
+        case "set_intent":
+        case "SET_INTENT":
+        case (MT.SET_INTENT || "set_intent"):
+            setIntent(message.intent, message.subtext, message.phase);
+            sendResponse({ status: "success" });
+            break;
+
+        case "set_milestone":
+        case "SET_MILESTONE":
+        case (MT.SET_MILESTONE || "set_milestone"):
+            setMilestone(message.milestone_title || message.title, message.phase_number || message.phase, message.total_phases);
+            sendResponse({ status: "success" });
+            break;
 
         default:
             break;
@@ -1139,7 +1162,7 @@ function renderActiveGlow(sessionTitle, groupColor) {
 
     shadow.appendChild(shield);
 
-    // C. Bottom Floating HUD Pill (Screenshot / Manus Style)
+    // C. Bottom Floating HUD Pill (Spec 21: Live Intent & Action Ticker)
     const pill = document.createElement("div");
     pill.id = "ab-control-pill";
     pill.style.cssText = `
@@ -1147,26 +1170,27 @@ function renderActiveGlow(sessionTitle, groupColor) {
         bottom: 20px !important;
         left: 50% !important;
         transform: translateX(-50%) !important;
-        min-width: 360px !important;
-        max-width: 90vw !important;
-        display: flex !important;
+        min-width: 420px !important;
+        max-width: min(680px, 92vw) !important;
+        display: ${isHudMinimized ? 'none' : 'flex'} !important;
         flex-direction: column !important;
-        gap: 7px !important;
-        padding: 10px 16px 9px 16px !important;
+        gap: 6px !important;
+        padding: 10px 16px 10px 16px !important;
         box-sizing: border-box !important;
         z-index: 2147483647 !important;
         pointer-events: auto !important;
         background: #18181b !important;
         border: 1px solid rgba(255, 255, 255, 0.15) !important;
-        border-radius: 18px !important;
+        border-radius: 14px !important;
         color: #f4f4f5 !important;
         box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.05) !important;
         animation: agentSocketFadeInUp 0.25s ease-out !important;
         backdrop-filter: blur(12px) !important;
     `;
 
-    // Row 1: Title & Controls
+    // Row 1: Status dot, Phase badge, Intent string & Controls
     const topRow = document.createElement("div");
+    topRow.id = "ab-hud-top-row";
     topRow.style.cssText = `
         display: flex !important;
         align-items: center !important;
@@ -1176,74 +1200,110 @@ function renderActiveGlow(sessionTitle, groupColor) {
     `;
 
     const leftGroup = document.createElement("div");
+    leftGroup.id = "ab-hud-left-group";
     leftGroup.style.cssText = `
         display: flex !important;
         align-items: center !important;
         gap: 8px !important;
         overflow: hidden !important;
+        flex: 1 !important;
     `;
 
-    const isInitialCompleted = (currentProgress.percent >= 100) || (currentProgress.totalSteps > 0 && currentProgress.currentStep >= currentProgress.totalSteps);
-
-    // Pulsing dot indicator
+    // 1. Pulsing status dot (🟢 Green / 🟡 Amber / 🔴 Red)
     const dot = document.createElement("span");
+    dot.id = "ab-status-dot";
+    const dotColor = isTakeoverActive ? "#f9e2af" : "#a6e3a1";
     dot.style.cssText = `
-        width: 8px;
-        height: 8px;
-        background: ${isInitialCompleted ? '#10B981' : theme.borderHex};
-        border-radius: 50%;
-        display: inline-block;
-        flex-shrink: 0;
-        box-shadow: ${isInitialCompleted ? '0 0 10px #10B981' : `0 0 8px ${theme.borderHex}`};
-        ${isInitialCompleted ? '' : 'animation: agentSocketPulse 1.8s infinite ease-in-out;'};
+        width: 9px !important;
+        height: 9px !important;
+        background: ${dotColor} !important;
+        border-radius: 50% !important;
+        display: inline-block !important;
+        flex-shrink: 0 !important;
+        box-shadow: 0 0 8px ${dotColor} !important;
+        ${isTakeoverActive ? '' : 'animation: agentSocketPulse 1.8s infinite ease-in-out !important;'};
     `;
 
-    // Title label
-    const label = document.createElement("div");
-    label.style.cssText = `
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        font-weight: 500;
-        color: #ffffff;
-        font-size: 13px;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
+    // 2. Phase badge ([Phase X/Y])
+    const phaseBadge = document.createElement("span");
+    phaseBadge.id = "ab-phase-badge";
+    phaseBadge.style.cssText = `
+        display: ${currentPhaseBadge ? 'inline-block' : 'none'} !important;
+        background: rgba(255, 255, 255, 0.08) !important;
+        border: 1px solid rgba(255, 255, 255, 0.15) !important;
+        border-radius: 4px !important;
+        padding: 1px 6px !important;
+        font-size: 11px !important;
+        font-weight: 600 !important;
+        color: #cdd6f4 !important;
+        white-space: nowrap !important;
+        flex-shrink: 0 !important;
     `;
-    label.innerHTML = `<span>⚡</span> <span>${escapeHtml(sessionTitle)}</span>`;
+    phaseBadge.textContent = currentPhaseBadge;
+
+    // 3. High-level intent string
+    const intentText = document.createElement("span");
+    intentText.id = "ab-intent-text";
+    intentText.style.cssText = `
+        font-size: 13px !important;
+        font-weight: 500 !important;
+        color: #ffffff !important;
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        line-height: 1.3 !important;
+    `;
+    intentText.textContent = isTakeoverActive ? "Human Takeover Active: Operator in control" : (currentIntent || sessionTitle);
 
     leftGroup.appendChild(dot);
-    leftGroup.appendChild(label);
+    leftGroup.appendChild(phaseBadge);
+    leftGroup.appendChild(intentText);
 
-    // Action buttons container
+    // Controls container (Right)
     const btnGroup = document.createElement("div");
-    btnGroup.style.cssText = `display: flex; align-items: center; gap: 8px; flex-shrink: 0;`;
-
-    // Take Over button (Label preserved invariant as 'Take Over')
-    const takeoverBtn = document.createElement("button");
-    takeoverBtn.className = "ab-btn";
-    takeoverBtn.innerHTML = "<span>Take Over</span>";
-    takeoverBtn.style.cssText += `
-        background: rgba(255, 255, 255, 0.1) !important;
-        border: 1px solid rgba(255, 255, 255, 0.2) !important;
-        color: #e4e4e7 !important;
-        font-size: 12px !important;
-        padding: 4px 11px !important;
-        border-radius: 12px !important;
+    btnGroup.id = "ab-hud-btn-group";
+    btnGroup.style.cssText = `
+        display: flex !important;
+        align-items: center !important;
+        gap: 6px !important;
+        flex-shrink: 0 !important;
     `;
-    takeoverBtn.onmouseenter = () => { takeoverBtn.style.background = "rgba(255, 255, 255, 0.18)"; };
-    takeoverBtn.onmouseleave = () => { takeoverBtn.style.background = "rgba(255, 255, 255, 0.1)"; };
-    takeoverBtn.onclick = () => {
-        renderTakeoverUI(sessionTitle);
-        chrome.runtime.sendMessage({
-            type: MT.PAGE_TAKEOVER,
-            notes: `Operator initiated manual takeover on ${window.location.hostname}`
-        });
-    };
 
-    // Stop button (Vibrant Red Pill Button)
+    // Takeover / Release button
+    const takeoverBtn = document.createElement("button");
+    takeoverBtn.id = "ab-takeover-btn";
+    takeoverBtn.className = "ab-btn";
+    if (isTakeoverActive) {
+        takeoverBtn.innerHTML = "<span>Release to Agent</span>";
+        takeoverBtn.style.cssText += `
+            background: #0f7b6c !important;
+            color: #ffffff !important;
+            font-size: 12px !important;
+            padding: 4px 11px !important;
+            border-radius: 10px !important;
+            border: 1px solid #14b8a6 !important;
+        `;
+        takeoverBtn.onmouseenter = () => { takeoverBtn.style.background = "#0b675a"; };
+        takeoverBtn.onmouseleave = () => { takeoverBtn.style.background = "#0f7b6c"; };
+        takeoverBtn.onclick = () => handleRelease();
+    } else {
+        takeoverBtn.innerHTML = "<span>Take Over</span>";
+        takeoverBtn.style.cssText += `
+            background: rgba(255, 255, 255, 0.1) !important;
+            border: 1px solid rgba(255, 255, 255, 0.2) !important;
+            color: #e4e4e7 !important;
+            font-size: 12px !important;
+            padding: 4px 11px !important;
+            border-radius: 10px !important;
+        `;
+        takeoverBtn.onmouseenter = () => { takeoverBtn.style.background = "rgba(255, 255, 255, 0.18)"; };
+        takeoverBtn.onmouseleave = () => { takeoverBtn.style.background = "rgba(255, 255, 255, 0.1)"; };
+        takeoverBtn.onclick = () => handleTakeover();
+    }
+
+    // Stop button
     const stopBtn = document.createElement("button");
+    stopBtn.id = "ab-stop-btn";
     stopBtn.className = "ab-btn";
     stopBtn.innerHTML = "<span>Stop</span>";
     stopBtn.style.cssText += `
@@ -1251,10 +1311,10 @@ function renderActiveGlow(sessionTitle, groupColor) {
         color: #ffffff !important;
         font-weight: 600 !important;
         font-size: 12px !important;
-        padding: 4px 12px !important;
-        border-radius: 12px !important;
+        padding: 4px 10px !important;
+        border-radius: 10px !important;
         border: none !important;
-        box-shadow: 0 2px 8px rgba(239, 68, 68, 0.4) !important;
+        box-shadow: 0 2px 8px rgba(239, 68, 68, 0.3) !important;
     `;
     stopBtn.onmouseenter = () => { stopBtn.style.background = "#dc2626"; };
     stopBtn.onmouseleave = () => { stopBtn.style.background = "#ef4444"; };
@@ -1263,169 +1323,271 @@ function renderActiveGlow(sessionTitle, groupColor) {
         removeAllUI();
     };
 
+    // Minimize button (✕)
+    const minBtn = document.createElement("button");
+    minBtn.id = "ab-minimize-btn";
+    minBtn.className = "ab-btn";
+    minBtn.title = "Minimize HUD to floating pill";
+    minBtn.innerHTML = "<span>✕</span>";
+    minBtn.style.cssText += `
+        background: transparent !important;
+        border: none !important;
+        color: #71717a !important;
+        font-size: 11px !important;
+        padding: 4px 6px !important;
+        border-radius: 8px !important;
+        line-height: 1 !important;
+    `;
+    minBtn.onmouseenter = () => { minBtn.style.color = "#ffffff"; minBtn.style.background = "rgba(255, 255, 255, 0.1)"; };
+    minBtn.onmouseleave = () => { minBtn.style.color = "#71717a"; minBtn.style.background = "transparent"; };
+    minBtn.onclick = () => toggleMinimize();
+
     btnGroup.appendChild(takeoverBtn);
     btnGroup.appendChild(stopBtn);
+    btnGroup.appendChild(minBtn);
 
     topRow.appendChild(leftGroup);
     topRow.appendChild(btnGroup);
 
-    // Row 2: Completion Progress Bar
-    const progressSection = createProgressSection(currentProgress, theme);
+    // Row 2: Live micro-action subtext indicator
+    const subtextRow = document.createElement("div");
+    subtextRow.id = "ab-action-subtext";
+    subtextRow.style.cssText = `
+        font-size: 11.5px !important;
+        color: #a1a1aa !important;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
+        padding-left: 17px !important;
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        line-height: 1.3 !important;
+    `;
+    subtextRow.textContent = isTakeoverActive
+        ? "↳ Solve challenge / 2FA or navigate, then click 'Release to Agent'"
+        : (currentActionSubtext ? `↳ Action: ${currentActionSubtext}` : "");
 
     pill.appendChild(topRow);
-    pill.appendChild(progressSection);
-
+    pill.appendChild(subtextRow);
     shadow.appendChild(pill);
-}
 
-// ============================================================================
-// PROGRESS BAR SECTION HELPER & LIVE UPDATES
-// ============================================================================
-function createProgressSection(progressData, theme) {
-    const container = document.createElement("div");
-    container.id = "ab-progress-section";
-    container.style.cssText = `
-        width: 100% !important;
-        display: flex !important;
-        flex-direction: column !important;
-        gap: 4px !important;
-        box-sizing: border-box !important;
-    `;
-
-    // Track
-    const track = document.createElement("div");
-    track.id = "ab-progress-track";
-    track.style.cssText = `
-        width: 100% !important;
-        height: 4.5px !important;
-        background: rgba(255, 255, 255, 0.12) !important;
-        border-radius: 999px !important;
-        overflow: hidden !important;
-        position: relative !important;
-    `;
-
-    const percent = computeProgressPercent(progressData);
-    const isCompleted = percent >= 100 || (progressData.totalSteps > 0 && progressData.currentStep >= progressData.totalSteps);
-
-    const fill = document.createElement("div");
-    fill.id = "ab-progress-fill";
-    const bgGradient = isCompleted
-        ? "linear-gradient(90deg, #10B981, #34D399)"
-        : `linear-gradient(90deg, ${theme.borderHex}, #60a5fa)`;
-    const glowColor = isCompleted ? "rgba(16, 185, 129, 0.55)" : theme.glowRgba;
-
-    fill.style.cssText = `
-        width: ${percent}% !important;
-        height: 100% !important;
-        background: ${bgGradient} !important;
-        border-radius: 999px !important;
-        transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1) !important;
-        box-shadow: 0 0 8px ${glowColor} !important;
-    `;
-    track.appendChild(fill);
-
-    // Labels Row
-    const labelsRow = document.createElement("div");
-    labelsRow.id = "ab-progress-labels";
-    labelsRow.style.cssText = `
-        display: flex !important;
-        justify-content: space-between !important;
+    // D. Floating Minimized Glow Pill (Bottom-Right)
+    const minPill = document.createElement("div");
+    minPill.id = "ab-minimized-pill";
+    minPill.style.cssText = `
+        position: fixed !important;
+        bottom: 20px !important;
+        right: 20px !important;
+        z-index: 2147483647 !important;
+        background: #18181b !important;
+        border: 1px solid rgba(255, 255, 255, 0.2) !important;
+        border-radius: 20px !important;
+        padding: 6px 12px !important;
+        display: ${isHudMinimized ? 'flex' : 'none'} !important;
         align-items: center !important;
-        font-size: 11px !important;
-        color: #a1a1aa !important;
-        line-height: 1 !important;
-        padding: 0 2px !important;
+        gap: 8px !important;
+        cursor: pointer !important;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5) !important;
+        backdrop-filter: blur(10px) !important;
+        user-select: none !important;
+        pointer-events: auto !important;
+        transition: transform 0.15s ease !important;
+    `;
+    minPill.onmouseenter = () => { minPill.style.transform = "scale(1.04)"; };
+    minPill.onmouseleave = () => { minPill.style.transform = "scale(1)"; };
+    minPill.onclick = () => toggleMinimize();
+
+    const minDot = document.createElement("span");
+    minDot.id = "ab-min-dot";
+    minDot.style.cssText = `
+        width: 8px !important;
+        height: 8px !important;
+        background: ${dotColor} !important;
+        border-radius: 50% !important;
+        box-shadow: 0 0 8px ${dotColor} !important;
+        ${isTakeoverActive ? '' : 'animation: agentSocketPulse 1.8s infinite ease-in-out !important;'};
     `;
 
-    const stepLabel = document.createElement("span");
-    stepLabel.id = "ab-progress-step-text";
-    if (isCompleted) {
-        stepLabel.innerText = "✅ Task Complete (100%)";
-    } else if (progressData.totalSteps > 0) {
-        stepLabel.innerText = `Step ${progressData.currentStep} of ${progressData.totalSteps}${progressData.stepTitle ? ` • ${progressData.stepTitle}` : ''}`;
-    } else {
-        stepLabel.innerText = "Task in progress...";
-    }
+    const minLabel = document.createElement("span");
+    minLabel.id = "ab-min-label";
+    minLabel.style.cssText = `
+        font-size: 11px !important;
+        font-weight: 500 !important;
+        color: #e4e4e7 !important;
+    `;
+    const snippet = currentIntent.length > 24 ? currentIntent.slice(0, 22) + "..." : currentIntent;
+    minLabel.textContent = isTakeoverActive ? "Takeover Active" : snippet;
 
-    const percentLabel = document.createElement("span");
-    percentLabel.id = "ab-progress-percent-text";
-    const tagTextColor = isCompleted ? "#34D399" : (theme.tagText || '#38bdf8');
-    percentLabel.style.cssText = `font-weight: 600; color: ${tagTextColor};`;
-    percentLabel.innerText = `${Math.round(percent)}%`;
+    const minExpand = document.createElement("span");
+    minExpand.style.cssText = `font-size: 10px !important; color: #71717a !important;`;
+    minExpand.textContent = "⤢";
 
-    labelsRow.appendChild(stepLabel);
-    labelsRow.appendChild(percentLabel);
-
-    container.appendChild(track);
-    container.appendChild(labelsRow);
-
-    if (isCompleted && !document.title.startsWith("✅ ")) {
-        document.title = "✅ " + document.title;
-    }
-
-    return container;
+    minPill.appendChild(minDot);
+    minPill.appendChild(minLabel);
+    minPill.appendChild(minExpand);
+    shadow.appendChild(minPill);
 }
 
-function updateHudProgressBar(progressData, groupColor) {
+// Live Update Ticker Function (Zero Flickering)
+function updateHudTicker() {
     const shadow = getOrCreateShadowRoot();
-    const fill = shadow.getElementById ? shadow.getElementById("ab-progress-fill") : shadow.querySelector("#ab-progress-fill");
-    const stepText = shadow.getElementById ? shadow.getElementById("ab-progress-step-text") : shadow.querySelector("#ab-progress-step-text");
-    const percentText = shadow.getElementById ? shadow.getElementById("ab-progress-percent-text") : shadow.querySelector("#ab-progress-percent-text");
-    const dot = shadow.querySelector ? shadow.querySelector("#ab-control-pill span") : null;
+    if (!shadow) return;
 
-    if (!fill) return;
+    const dot = shadow.getElementById ? shadow.getElementById("ab-status-dot") : shadow.querySelector("#ab-status-dot");
+    const phase = shadow.getElementById ? shadow.getElementById("ab-phase-badge") : shadow.querySelector("#ab-phase-badge");
+    const intent = shadow.getElementById ? shadow.getElementById("ab-intent-text") : shadow.querySelector("#ab-intent-text");
+    const subtext = shadow.getElementById ? shadow.getElementById("ab-action-subtext") : shadow.querySelector("#ab-action-subtext");
+    const minDot = shadow.getElementById ? shadow.getElementById("ab-min-dot") : shadow.querySelector("#ab-min-dot");
+    const minLabel = shadow.getElementById ? shadow.getElementById("ab-min-label") : shadow.querySelector("#ab-min-label");
 
-    const theme = getThemeColors(groupColor || currentGroupColor);
-    const percent = computeProgressPercent(progressData);
-    const isCompleted = percent >= 100 || (progressData.totalSteps > 0 && progressData.currentStep >= progressData.totalSteps);
+    const dotColor = isTakeoverActive ? "#f9e2af" : "#a6e3a1";
 
-    fill.style.width = `${percent}%`;
+    if (dot) {
+        dot.style.background = dotColor;
+        dot.style.boxShadow = `0 0 8px ${dotColor}`;
+        dot.style.animation = isTakeoverActive ? 'none' : 'agentSocketPulse 1.8s infinite ease-in-out';
+    }
+    if (minDot) {
+        minDot.style.background = dotColor;
+        minDot.style.boxShadow = `0 0 8px ${dotColor}`;
+        minDot.style.animation = isTakeoverActive ? 'none' : 'agentSocketPulse 1.8s infinite ease-in-out';
+    }
 
-    if (isCompleted) {
-        fill.style.background = "linear-gradient(90deg, #10B981, #34D399)";
-        fill.style.boxShadow = "0 0 10px rgba(16, 185, 129, 0.6)";
-
-        if (dot) {
-            dot.style.background = "#10B981";
-            dot.style.boxShadow = "0 0 10px #10B981";
-            dot.style.animation = "none";
-        }
-
-        if (percentText) {
-            percentText.innerText = "100%";
-            percentText.style.color = "#34D399";
-        }
-
-        if (stepText) {
-            stepText.innerText = "✅ Task Complete (100%)";
-        }
-
-        if (!document.title.startsWith("✅ ")) {
-            document.title = "✅ " + document.title;
-        }
-    } else {
-        fill.style.background = `linear-gradient(90deg, ${theme.borderHex}, #60a5fa)`;
-        fill.style.boxShadow = `0 0 8px ${theme.glowRgba}`;
-
-        if (dot) {
-            dot.style.background = theme.borderHex;
-            dot.style.boxShadow = `0 0 8px ${theme.borderHex}`;
-            dot.style.animation = "agentSocketPulse 1.8s infinite ease-in-out";
-        }
-
-        if (percentText) {
-            percentText.innerText = `${Math.round(percent)}%`;
-            percentText.style.color = theme.tagText || '#38bdf8';
-        }
-
-        if (stepText) {
-            if (progressData.totalSteps > 0) {
-                stepText.innerText = `Step ${progressData.currentStep} of ${progressData.totalSteps}${progressData.stepTitle ? ` • ${progressData.stepTitle}` : ''}`;
-            } else {
-                stepText.innerText = `Task in progress (${Math.round(percent)}%)...`;
-            }
+    if (phase) {
+        if (currentPhaseBadge) {
+            phase.style.display = "inline-block";
+            phase.textContent = currentPhaseBadge;
+        } else {
+            phase.style.display = "none";
         }
     }
+
+    if (intent) {
+        intent.textContent = isTakeoverActive ? "Human Takeover Active: Operator in control" : currentIntent;
+    }
+    if (minLabel) {
+        minLabel.textContent = isTakeoverActive ? "Takeover Active" : (currentIntent.length > 24 ? currentIntent.slice(0, 22) + "..." : currentIntent);
+    }
+
+    if (subtext) {
+        subtext.textContent = isTakeoverActive
+            ? "↳ Solve challenge / 2FA or navigate, then click 'Release to Agent'"
+            : (currentActionSubtext ? `↳ Action: ${currentActionSubtext}` : "");
+    }
+}
+
+function toggleMinimize(forceState) {
+    isHudMinimized = (typeof forceState === "boolean") ? forceState : !isHudMinimized;
+    const shadow = getOrCreateShadowRoot();
+    if (!shadow) return;
+    const pill = shadow.getElementById ? shadow.getElementById("ab-control-pill") : shadow.querySelector("#ab-control-pill");
+    const minPill = shadow.getElementById ? shadow.getElementById("ab-minimized-pill") : shadow.querySelector("#ab-minimized-pill");
+    if (pill) pill.style.display = isHudMinimized ? "none" : "flex";
+    if (minPill) minPill.style.display = isHudMinimized ? "flex" : "none";
+}
+
+function setIntent(intent, subtext, phase) {
+    if (intent !== undefined && intent !== null) currentIntent = String(intent);
+    if (subtext !== undefined && subtext !== null) currentActionSubtext = String(subtext);
+    if (phase !== undefined && phase !== null) currentPhaseBadge = String(phase);
+    updateHudTicker();
+}
+
+function setMilestone(title, phaseNumber, totalPhases) {
+    if (title) currentIntent = String(title);
+    if (phaseNumber !== undefined && totalPhases !== undefined) {
+        currentPhaseBadge = `[Phase ${phaseNumber}/${totalPhases}]`;
+    } else if (phaseNumber !== undefined) {
+        currentPhaseBadge = `[Phase ${phaseNumber}]`;
+    }
+    updateHudTicker();
+}
+
+function handleTakeover(notes) {
+    isTakeoverActive = true;
+    isShieldActive = false; // Lift lockout shield so user can interact
+
+    const shadow = getOrCreateShadowRoot();
+    if (shadow) {
+        const shield = shadow.getElementById ? shadow.getElementById("ab-interaction-shield") : shadow.querySelector("#ab-interaction-shield");
+        if (shield) {
+            shield.style.pointerEvents = "none";
+            shield.style.display = "none";
+        }
+        const takeoverBtn = shadow.getElementById ? shadow.getElementById("ab-takeover-btn") : shadow.querySelector("#ab-takeover-btn");
+        if (takeoverBtn) {
+            takeoverBtn.innerHTML = "<span>Release to Agent</span>";
+            takeoverBtn.style.background = "#0f7b6c";
+            takeoverBtn.style.color = "#ffffff";
+            takeoverBtn.style.border = "1px solid #14b8a6";
+            takeoverBtn.onclick = () => handleRelease();
+        }
+    }
+
+    updateHudTicker();
+
+    try {
+        chrome.runtime.sendMessage({
+            type: MT.PAGE_TAKEOVER || "page_takeover",
+            notes: notes || `Operator initiated manual takeover on ${typeof window !== "undefined" && window.location ? window.location.hostname : "tab"}`
+        });
+    } catch (e) {}
+}
+
+function handleRelease(notes) {
+    currentIntent = "Resuming task... Observing page";
+    currentActionSubtext = "Capturing live ARIA tree snapshot...";
+    isTakeoverActive = false;
+    isShieldActive = true; // Re-engage shield for agent execution
+
+    const shadow = getOrCreateShadowRoot();
+    if (shadow) {
+        const shield = shadow.getElementById ? shadow.getElementById("ab-interaction-shield") : shadow.querySelector("#ab-interaction-shield");
+        if (shield) {
+            shield.style.pointerEvents = "auto";
+            shield.style.display = "block";
+        }
+        const takeoverBtn = shadow.getElementById ? shadow.getElementById("ab-takeover-btn") : shadow.querySelector("#ab-takeover-btn");
+        if (takeoverBtn) {
+            takeoverBtn.innerHTML = "<span>Take Over</span>";
+            takeoverBtn.style.background = "rgba(255, 255, 255, 0.1)";
+            takeoverBtn.style.color = "#e4e4e7";
+            takeoverBtn.style.border = "1px solid rgba(255, 255, 255, 0.2)";
+            takeoverBtn.onclick = () => handleTakeover();
+        }
+    }
+
+    updateHudTicker();
+
+    // Instant Auto-Observe on Release (Spec 21 contract)
+    let freshObs = null;
+    try {
+        if (typeof observePage === "function") {
+            freshObs = observePage({ show_badges: false });
+        }
+    } catch (e) {
+        console.warn("[AgentSocket] Auto-observe failed on release:", e);
+    }
+
+    const releaseNotes = notes || "Control released by operator.";
+
+    try {
+        chrome.runtime.sendMessage({
+            type: MT.PAGE_RESUME || "page_resume",
+            notes: releaseNotes,
+            observation: freshObs
+        });
+    } catch (e) {}
+
+    return { status: "success", notes: releaseNotes, observation: freshObs };
+}
+
+// Backwards compatibility aliases
+const renderLiveIntentHUD = renderActiveGlow;
+function updateHudProgressBar(progressData, groupColor) {
+    if (progressData && progressData.stepTitle) {
+        currentActionSubtext = progressData.stepTitle;
+    }
+    updateHudTicker();
 }
 
 // ============================================================================
@@ -1761,6 +1923,14 @@ function escapeHtml(str) {
         .replace(/'/g, "&#039;");
 }
 
+if (typeof window !== "undefined") {
+    window.__agentsocket_set_intent = setIntent;
+    window.__agentsocket_set_milestone = setMilestone;
+    window.__agentsocket_takeover = handleTakeover;
+    window.__agentsocket_release = handleRelease;
+    window.__agentsocket_toggle_minimize = toggleMinimize;
+}
+
 if (typeof module !== "undefined" && module.exports) {
     module.exports = {
         isElementVisible,
@@ -1776,7 +1946,14 @@ if (typeof module !== "undefined" && module.exports) {
         actScroll,
         actKeyPress,
         waitForSettlement,
-        executeAtomicAction
+        executeAtomicAction,
+        setIntent,
+        setMilestone,
+        handleTakeover,
+        handleRelease,
+        toggleMinimize,
+        renderLiveIntentHUD,
+        updateHudTicker
     };
 }
 

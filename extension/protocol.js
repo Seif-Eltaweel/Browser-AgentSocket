@@ -36,6 +36,8 @@
         SHOW_TAKEOVER: "show_takeover",
         HIDE_GLOW: "hide_glow",
         UPDATE_PROGRESS: "update_progress",
+        SET_INTENT: "set_intent",
+        SET_MILESTONE: "set_milestone",
 
         // Popup / Auth <-> Background
         GET_STATE: "get_state",
