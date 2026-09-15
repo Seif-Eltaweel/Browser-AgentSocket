@@ -153,6 +153,17 @@ class SetIntentRequest(BaseModel):
     phase: str | None = None
 
 
+class ScreenshotRequest(BaseModel):
+    tab_group_id: int | None = None
+    filename: str | None = None
+
+
+class TaskCompleteRequest(BaseModel):
+    tab_group_id: int | None = None
+    result: str | None = None
+    status: str = "completed"
+
+
 
 class ErrorDetail(BaseModel):
     code: str

@@ -47,6 +47,8 @@ from server.models import (
     ActRequest,
     ActResponse,
     SetIntentRequest,
+    ScreenshotRequest,
+    TaskCompleteRequest,
 )
 from server.session import session_manager
 
@@ -1085,6 +1087,168 @@ async def set_intent(
             logger.warning(f"Failed to send set_intent to extension: {e}")
 
 
+async def capture_screenshot(
+    tab_group_id: int | None = None,
+    filename: str | None = None,
+) -> dict[str, Any]:
+    state.record_activity()
+    session = state.get_session(tab_group_id)
+
+    if session.human_in_control:
+        return {
+            "status": ResponseStatus.HUMAN_LOCKED.value,
+            "message": "Human operator is currently in control of the browser session.",
+            "last_intervention_notes": session.last_intervention_notes,
+        }
+
+    # Check global vision permission
+    if not state.global_permissions.get("enable_vision", False):
+        return {
+            "status": "denied",
+            "error": {
+                "code": "VISION_DISABLED",
+                "message": "Screenshot blocked: 'enable_vision' is disabled in extension consent settings."
+            },
+            "message": "Vision disabled by user"
+        }
+
+    if not state.extension_ws:
+        return {
+            "status": ResponseStatus.ERROR.value,
+            "message": "Extension is offline.",
+            "error": {
+                "code": ErrorCode.EXTENSION_OFFLINE.value,
+                "message": "Chrome extension is not plugged into WebSocket gateway."
+            }
+        }
+
+    request_id = f"snap_{uuid.uuid4().hex[:8]}"
+    loop = asyncio.get_running_loop()
+    fut = loop.create_future()
+    session.pending_responses[request_id] = fut
+    state.pending_responses[request_id] = fut
+
+    active_sess = session_manager.get_active_session_by_group_id(session.tab_group_id)
+    session_title = active_sess.tab_group_name if active_sess else "Browser Task"
+
+    outbound_frame = {
+        "type": WSMessageType.EXECUTE_ACTION.value,
+        "id": request_id,
+        "command_id": request_id,
+        "action_type": ActionType.BROWSER_SCREENSHOT.value,
+        "target_data": filename or "",
+        "session_title": session_title,
+        "tab_group_id": session.tab_group_id,
+    }
+
+    try:
+        await state.extension_ws.send_text(json.dumps(outbound_frame))
+        result = await asyncio.wait_for(fut, timeout=15.0)
+
+        data_url = None
+        if isinstance(result, dict):
+            if result.get("status") == "denied":
+                return result
+            data_url = result.get("data")
+        elif isinstance(result, str):
+            data_url = result
+
+        saved_path = None
+        if data_url and isinstance(data_url, str) and "base64," in data_url:
+            import base64
+            try:
+                _, b64_data = data_url.split("base64,", 1)
+                img_bytes = base64.b64decode(b64_data)
+                save_dir = active_sess.artifacts_dir if active_sess else os.path.join(REPO_ROOT, "server", "logs", "screenshots")
+                os.makedirs(save_dir, exist_ok=True)
+                fname = filename or f"screenshot_{int(time.time() * 1000)}.png"
+                if not fname.endswith(".png"):
+                    fname += ".png"
+                saved_path = os.path.join(save_dir, fname)
+                with open(saved_path, "wb") as f:
+                    f.write(img_bytes)
+            except Exception as e:
+                logger.warning(f"Failed to write screenshot file: {e}")
+
+        return {
+            "status": "success",
+            "screenshot_path": saved_path,
+            "filename": os.path.basename(saved_path) if saved_path else filename,
+            "data": data_url[:100] + "..." if data_url and len(data_url) > 100 else data_url,
+            "message": "Screenshot captured successfully."
+        }
+    except asyncio.TimeoutError:
+        return {
+            "status": ResponseStatus.ERROR.value,
+            "message": "Screenshot capture timed out after 15.0s limit.",
+            "error": {
+                "code": ErrorCode.EXECUTION_TIMEOUT.value,
+                "message": "capture_screenshot exceeded 15.0s correlation limit."
+            }
+        }
+    finally:
+        state.pop_pending_future(request_id)
+
+
+async def finalize_task_complete(
+    tab_group_id: int | None = None,
+    result: str | None = None,
+    status: str = "completed",
+) -> dict[str, Any]:
+    state.record_activity()
+    gid = tab_group_id or 0
+    t_now = time.time()
+
+    active_sess = session_manager.get_active_session_by_group_id(gid)
+    if not active_sess and gid == 0 and session_manager.active_sessions:
+        active_sess = list(session_manager.active_sessions.values())[0]
+
+    session_title = active_sess.tab_group_name if active_sess else "Browser Task"
+    actual_gid = active_sess.tab_group_id if active_sess else gid
+
+    clean_title = session_title.replace("✅", "").strip()
+    completed_title = f"✅ {clean_title}"
+    session_manager.log_event(
+        tab_group_id=actual_gid,
+        event_type=SessionEventType.TASK_COMPLETE,
+        title=f"Task Completed: {completed_title}",
+        start_time=t_now,
+        end_time=t_now,
+        tab_id=getattr(active_sess, "active_tab_id", None) if active_sess else None,
+        tab_group_id_val=actual_gid,
+        payload={"result": result, "status": status},
+    )
+
+    sess_status = SessionStatus.COMPLETED if status == "completed" else SessionStatus.STOPPED
+    session_manager.finalize_session(tab_group_id=actual_gid, status=sess_status, end_reason="task_complete")
+
+    if state.extension_ws:
+        try:
+            await state.extension_ws.send_text(json.dumps({
+                "type": WSMessageType.EXECUTE_ACTION.value,
+                "id": f"tc_{uuid.uuid4().hex[:8]}",
+                "action_type": ActionType.TASK_COMPLETE.value,
+                "target_data": result or "",
+                "session_title": session_title,
+                "tab_group_id": actual_gid,
+            }))
+            await set_intent(tab_group_id=actual_gid, intent="", subtext="", phase=None)
+        except Exception as e:
+            logger.warning(f"Failed to dispatch task complete to extension: {e}")
+
+    if actual_gid in state.tab_sessions:
+        tab_sess = state.tab_sessions[actual_gid]
+        tab_sess.human_in_control = False
+        tab_sess.last_intervention_notes = None
+
+    return {
+        "status": "success",
+        "tab_group_id": actual_gid,
+        "result": result,
+        "message": f"Task concluded, session documentation finalized, and HUD state reset for tab group {actual_gid}."
+    }
+
+
 @app.post("/observe")
 async def observe_endpoint(payload: ObserveRequest) -> dict[str, Any]:
     state.record_activity()
@@ -1107,6 +1271,22 @@ async def set_intent_endpoint(payload: SetIntentRequest) -> dict[str, Any]:
         phase=payload.phase,
     )
     return {"status": "success"}
+
+
+@app.post("/screenshot")
+async def screenshot_endpoint(payload: ScreenshotRequest) -> dict[str, Any]:
+    state.record_activity()
+    return await capture_screenshot(tab_group_id=payload.tab_group_id, filename=payload.filename)
+
+
+@app.post("/task_complete")
+async def task_complete_endpoint(payload: TaskCompleteRequest) -> dict[str, Any]:
+    state.record_activity()
+    return await finalize_task_complete(
+        tab_group_id=payload.tab_group_id,
+        result=payload.result,
+        status=payload.status,
+    )
 
 
 @app.post("/human_release")

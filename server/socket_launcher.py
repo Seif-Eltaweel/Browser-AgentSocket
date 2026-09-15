@@ -379,6 +379,212 @@ def execute_action(
         }
 
 
+# ============================================================================
+# Atomic Operator Client Helpers (Spec 24)
+# ============================================================================
+
+def browser_observe(
+    tab_group_id: int | None = None,
+    take_screenshot: bool = False,
+    server_url: str = DEFAULT_SERVER_URL,
+) -> dict[str, Any]:
+    """Captures ARIA tree, assigns ephemeral numeric badges [1]..[N], and returns structured DOM snapshot."""
+    ensure_ready(server_url)
+    payload = {
+        "tab_group_id": tab_group_id,
+        "take_screenshot": take_screenshot,
+    }
+    try:
+        resp = requests.post(f"{server_url}/observe", json=payload, headers=get_auth_headers(), timeout=20.0)
+        return resp.json()
+    except Exception as e:
+        return {
+            "status": ResponseStatus.ERROR.value,
+            "message": f"Observation request failed: {e}",
+            "error": {"code": ErrorCode.INTERNAL_ERROR.value, "message": str(e)},
+        }
+
+
+def browser_click(
+    element_id: int,
+    tab_group_id: int | None = None,
+    wait_settle: bool = True,
+    server_url: str = DEFAULT_SERVER_URL,
+) -> dict[str, Any]:
+    """Dispatches native focus, mouse/pointer events on the element and awaits adaptive settlement."""
+    ensure_ready(server_url)
+    payload = {
+        "action": "click",
+        "element_id": element_id,
+        "tab_group_id": tab_group_id,
+        "wait_settle": wait_settle,
+    }
+    try:
+        resp = requests.post(f"{server_url}/act", json=payload, headers=get_auth_headers(), timeout=20.0)
+        return resp.json()
+    except Exception as e:
+        return {
+            "status": ResponseStatus.ERROR.value,
+            "message": f"Click request failed: {e}",
+            "error": {"code": ErrorCode.INTERNAL_ERROR.value, "message": str(e)},
+        }
+
+
+def browser_type(
+    element_id: int,
+    text: str,
+    tab_group_id: int | None = None,
+    clear_first: bool = False,
+    press_enter: bool = False,
+    server_url: str = DEFAULT_SERVER_URL,
+) -> dict[str, Any]:
+    """Sets element value via prototype setter, dispatches change events, and settles."""
+    ensure_ready(server_url)
+    payload = {
+        "action": "type",
+        "element_id": element_id,
+        "text": text,
+        "tab_group_id": tab_group_id,
+        "clear_first": clear_first,
+        "press_enter": press_enter,
+    }
+    try:
+        resp = requests.post(f"{server_url}/act", json=payload, headers=get_auth_headers(), timeout=20.0)
+        return resp.json()
+    except Exception as e:
+        return {
+            "status": ResponseStatus.ERROR.value,
+            "message": f"Type request failed: {e}",
+            "error": {"code": ErrorCode.INTERNAL_ERROR.value, "message": str(e)},
+        }
+
+
+def browser_scroll(
+    direction: str,
+    amount: int | None = None,
+    tab_group_id: int | None = None,
+    server_url: str = DEFAULT_SERVER_URL,
+) -> dict[str, Any]:
+    """Scrolls viewport ('down', 'up', 'top', 'bottom')."""
+    ensure_ready(server_url)
+    payload = {
+        "action": "scroll",
+        "direction": direction,
+        "amount": amount,
+        "tab_group_id": tab_group_id,
+    }
+    try:
+        resp = requests.post(f"{server_url}/act", json=payload, headers=get_auth_headers(), timeout=20.0)
+        return resp.json()
+    except Exception as e:
+        return {
+            "status": ResponseStatus.ERROR.value,
+            "message": f"Scroll request failed: {e}",
+            "error": {"code": ErrorCode.INTERNAL_ERROR.value, "message": str(e)},
+        }
+
+
+def browser_key_press(
+    key: str,
+    tab_group_id: int | None = None,
+    server_url: str = DEFAULT_SERVER_URL,
+) -> dict[str, Any]:
+    """Sends native keyboard events ('Enter', 'Escape', 'Tab', etc.)."""
+    ensure_ready(server_url)
+    payload = {
+        "action": "key_press",
+        "key": key,
+        "tab_group_id": tab_group_id,
+    }
+    try:
+        resp = requests.post(f"{server_url}/act", json=payload, headers=get_auth_headers(), timeout=20.0)
+        return resp.json()
+    except Exception as e:
+        return {
+            "status": ResponseStatus.ERROR.value,
+            "message": f"Key press request failed: {e}",
+            "error": {"code": ErrorCode.INTERNAL_ERROR.value, "message": str(e)},
+        }
+
+
+def browser_screenshot(
+    tab_group_id: int | None = None,
+    filename: str | None = None,
+    server_url: str = DEFAULT_SERVER_URL,
+) -> dict[str, Any]:
+    """Captures high-res screenshot (if vision permission granted by user)."""
+    ensure_ready(server_url)
+    payload = {
+        "tab_group_id": tab_group_id,
+        "filename": filename,
+    }
+    try:
+        resp = requests.post(f"{server_url}/screenshot", json=payload, headers=get_auth_headers(), timeout=20.0)
+        return resp.json()
+    except Exception as e:
+        return {
+            "status": ResponseStatus.ERROR.value,
+            "message": f"Screenshot request failed: {e}",
+            "error": {"code": ErrorCode.INTERNAL_ERROR.value, "message": str(e)},
+        }
+
+
+def task_complete(
+    result: str | None = None,
+    status: str = "completed",
+    tab_group_id: int | None = None,
+    server_url: str = DEFAULT_SERVER_URL,
+) -> dict[str, Any]:
+    """Concludes task, finalizes session documentation, and resets HUD state."""
+    ensure_ready(server_url)
+    payload = {
+        "tab_group_id": tab_group_id,
+        "result": result,
+        "status": status,
+    }
+    try:
+        resp = requests.post(f"{server_url}/task_complete", json=payload, headers=get_auth_headers(), timeout=20.0)
+        return resp.json()
+    except Exception as e:
+        return {
+            "status": ResponseStatus.ERROR.value,
+            "message": f"Task complete request failed: {e}",
+            "error": {"code": ErrorCode.INTERNAL_ERROR.value, "message": str(e)},
+        }
+
+
+def browser_set_milestone(
+    milestone_title: str,
+    phase_number: int | None = None,
+    total_phases: int | None = None,
+    tab_group_id: int | None = None,
+    server_url: str = DEFAULT_SERVER_URL,
+) -> dict[str, Any]:
+    """Updates HUD phase badge and intent ticker for complex workflows."""
+    ensure_ready(server_url)
+    phase_str = None
+    if phase_number is not None and total_phases is not None:
+        phase_str = f"Phase {phase_number}/{total_phases}"
+    elif phase_number is not None:
+        phase_str = f"Phase {phase_number}"
+
+    payload = {
+        "tab_group_id": tab_group_id,
+        "intent": milestone_title,
+        "subtext": "",
+        "phase": phase_str,
+    }
+    try:
+        resp = requests.post(f"{server_url}/set_intent", json=payload, headers=get_auth_headers(), timeout=5.0)
+        return resp.json()
+    except Exception as e:
+        return {
+            "status": ResponseStatus.ERROR.value,
+            "message": f"Set milestone request failed: {e}",
+            "error": {"code": ErrorCode.INTERNAL_ERROR.value, "message": str(e)},
+        }
+
+
 def send_progress(
     session_title: str,
     step_current: int,
