@@ -197,6 +197,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             sendResponse(obsResult);
             break;
 
+        case "act_element":
+        case "ACT_ELEMENT":
+            executeAtomicAction(message.payload || message)
+                .then(res => sendResponse(res))
+                .catch(err => sendResponse({ status: "error", message: err.message }));
+            return true;
+
         default:
             break;
     }
@@ -572,6 +579,353 @@ if (typeof window !== "undefined") {
     window.__agentsocket_observe = observePage;
     window.__agentsocket_remove_badges = removeBadges;
     window.__agentsocket_traverse_aria = traverseAriaTree;
+}
+
+// ============================================================================
+// NATIVE ATOMIC OPERATOR DRIVER & ADAPTIVE SETTLEMENT ENGINE (Spec 20)
+// ============================================================================
+
+function getRegisteredElement(elementId) {
+    if (typeof window === "undefined" || !window.__agentsocket_elements) {
+        return null;
+    }
+    const numId = parseInt(elementId, 10);
+    return window.__agentsocket_elements.get(numId) || null;
+}
+
+function actClick(elementId, options = {}) {
+    const el = (typeof elementId === "object" && elementId !== null) ? elementId : getRegisteredElement(elementId);
+    if (!el) {
+        throw new Error(`Element [${elementId}] not found in element registry. Please re-run observe_page.`);
+    }
+
+    if (el.scrollIntoView) {
+        try {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+        } catch (e) {
+            try { el.scrollIntoView(); } catch (err) {}
+        }
+    }
+
+    if (el.focus) {
+        try { el.focus(); } catch (e) {}
+    }
+
+    const win = (typeof window !== "undefined") ? window : null;
+
+    // Sequential native mouse/pointer event chain
+    const pointerDown = (typeof PointerEvent !== "undefined")
+        ? new PointerEvent('pointerdown', { bubbles: true, cancelable: true, view: win })
+        : new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: win });
+    el.dispatchEvent(pointerDown);
+
+    const mouseDown = new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: win });
+    el.dispatchEvent(mouseDown);
+
+    const pointerUp = (typeof PointerEvent !== "undefined")
+        ? new PointerEvent('pointerup', { bubbles: true, cancelable: true, view: win })
+        : new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: win });
+    el.dispatchEvent(pointerUp);
+
+    const mouseUp = new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: win });
+    el.dispatchEvent(mouseUp);
+
+    const clickEvt = new MouseEvent('click', { bubbles: true, cancelable: true, view: win });
+    el.dispatchEvent(clickEvt);
+
+    return {
+        status: "success",
+        action: "click",
+        element_id: typeof elementId === "number" ? elementId : null
+    };
+}
+
+function actType(elementId, text, options = {}) {
+    const el = (typeof elementId === "object" && elementId !== null) ? elementId : getRegisteredElement(elementId);
+    if (!el) {
+        throw new Error(`Element [${elementId}] not found in element registry. Please re-run observe_page.`);
+    }
+
+    if (el.scrollIntoView) {
+        try { el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' }); } catch (e) {}
+    }
+    if (el.focus) {
+        try { el.focus(); } catch (e) {}
+    }
+
+    const clearFirst = !!options.clear_first || !!options.clearFirst;
+    const pressEnter = !!options.press_enter || !!options.pressEnter;
+    const textToType = text !== undefined && text !== null ? String(text) : "";
+
+    // Bypass React/Vue/Angular property descriptor overrides using prototype setter
+    const tag = (el.tagName || "").toUpperCase();
+    const isTextarea = tag === "TEXTAREA" || (typeof HTMLTextAreaElement !== "undefined" && el instanceof HTMLTextAreaElement);
+
+    let proto = null;
+    if (isTextarea && typeof HTMLTextAreaElement !== "undefined") {
+        proto = HTMLTextAreaElement.prototype;
+    } else if (typeof HTMLInputElement !== "undefined" && el instanceof HTMLInputElement) {
+        proto = HTMLInputElement.prototype;
+    } else if (el) {
+        proto = Object.getPrototypeOf(el);
+    }
+
+    let setter = null;
+    let getter = null;
+    if (proto) {
+        const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+        if (desc) {
+            if (desc.set) setter = desc.set;
+            if (desc.get) getter = desc.get;
+        }
+    }
+
+    const currentValue = getter ? getter.call(el) : (el.value || "");
+    const targetValue = clearFirst ? textToType : (currentValue + textToType);
+
+    if (setter) {
+        if (clearFirst) {
+            setter.call(el, "");
+        }
+        setter.call(el, targetValue);
+    } else {
+        if (clearFirst) {
+            el.value = "";
+        }
+        el.value = targetValue;
+    }
+
+    // Dispatch standard synthetic input and change events
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+
+    // Optional Enter dispatch
+    if (pressEnter) {
+        const win = (typeof window !== "undefined") ? window : null;
+        const keyOptions = {
+            key: "Enter",
+            code: "Enter",
+            keyCode: 13,
+            which: 13,
+            bubbles: true,
+            cancelable: true,
+            view: win
+        };
+        const downEvt = (typeof KeyboardEvent !== "undefined") ? new KeyboardEvent('keydown', keyOptions) : new Event('keydown', { bubbles: true });
+        const pressEvt = (typeof KeyboardEvent !== "undefined") ? new KeyboardEvent('keypress', keyOptions) : new Event('keypress', { bubbles: true });
+        const upEvt = (typeof KeyboardEvent !== "undefined") ? new KeyboardEvent('keyup', keyOptions) : new Event('keyup', { bubbles: true });
+
+        el.dispatchEvent(downEvt);
+        el.dispatchEvent(pressEvt);
+        el.dispatchEvent(upEvt);
+    }
+
+    return {
+        status: "success",
+        action: "type",
+        element_id: typeof elementId === "number" ? elementId : null,
+        value: el.value
+    };
+}
+
+function actScroll(direction, amount) {
+    const dir = (direction || "down").toLowerCase();
+    const amt = typeof amount === "number" && !isNaN(amount) ? amount : 500;
+    const win = typeof window !== "undefined" ? window : null;
+    const doc = typeof document !== "undefined" ? document : null;
+
+    if (!win) {
+        return { status: "success", action: "scroll", direction: dir, amount: amt };
+    }
+
+    switch (dir) {
+        case "down":
+            if (win.scrollBy) win.scrollBy({ top: amt, behavior: 'smooth' });
+            break;
+        case "up":
+            if (win.scrollBy) win.scrollBy({ top: -amt, behavior: 'smooth' });
+            break;
+        case "top":
+            if (win.scrollTo) win.scrollTo({ top: 0, behavior: 'smooth' });
+            break;
+        case "bottom":
+            const maxScroll = (doc && doc.body) ? (doc.body.scrollHeight || doc.documentElement.scrollHeight || 999999) : 999999;
+            if (win.scrollTo) win.scrollTo({ top: maxScroll, behavior: 'smooth' });
+            break;
+        default:
+            if (win.scrollBy) win.scrollBy({ top: amt, behavior: 'smooth' });
+            break;
+    }
+
+    return { status: "success", action: "scroll", direction: dir, amount: amt };
+}
+
+function actKeyPress(key) {
+    const keyName = key || "Enter";
+    const target = (typeof document !== "undefined" && document.activeElement) ? document.activeElement : (typeof document !== "undefined" ? document.body : null);
+    const win = typeof window !== "undefined" ? window : null;
+
+    if (!target) {
+        return { status: "success", action: "key_press", key: keyName };
+    }
+
+    const keyOptions = {
+        key: keyName,
+        code: keyName === "Enter" ? "Enter" : (keyName === "Escape" ? "Escape" : (keyName === "Tab" ? "Tab" : keyName)),
+        keyCode: keyName === "Enter" ? 13 : (keyName === "Escape" ? 27 : (keyName === "Tab" ? 9 : 0)),
+        which: keyName === "Enter" ? 13 : (keyName === "Escape" ? 27 : (keyName === "Tab" ? 9 : 0)),
+        bubbles: true,
+        cancelable: true,
+        view: win
+    };
+
+    const downEvt = (typeof KeyboardEvent !== "undefined") ? new KeyboardEvent('keydown', keyOptions) : new Event('keydown', { bubbles: true });
+    const pressEvt = (typeof KeyboardEvent !== "undefined") ? new KeyboardEvent('keypress', keyOptions) : new Event('keypress', { bubbles: true });
+    const upEvt = (typeof KeyboardEvent !== "undefined") ? new KeyboardEvent('keyup', keyOptions) : new Event('keyup', { bubbles: true });
+
+    target.dispatchEvent(downEvt);
+    target.dispatchEvent(pressEvt);
+    target.dispatchEvent(upEvt);
+
+    return { status: "success", action: "key_press", key: keyName };
+}
+
+function waitForSettlement(options = {}) {
+    const quiescenceMs = options.quiescenceMs || options.quiescence_ms || 300;
+    const maxWaitMs = options.maxWaitMs || options.max_wait_ms || 3000;
+
+    return new Promise((resolve) => {
+        const startTime = Date.now();
+        let mutationsObserved = 0;
+        let networkRequestsSettled = 0;
+        let observer = null;
+        let quietTimer = null;
+        let maxTimer = null;
+        let isResolved = false;
+
+        function finish(reason) {
+            if (isResolved) return;
+            isResolved = true;
+
+            if (observer) {
+                try { observer.disconnect(); } catch (e) {}
+            }
+            if (quietTimer) clearTimeout(quietTimer);
+            if (maxTimer) clearTimeout(maxTimer);
+
+            const durationMs = Date.now() - startTime;
+            resolve({
+                duration_ms: durationMs,
+                mutations_observed: mutationsObserved,
+                network_requests_settled: networkRequestsSettled,
+                settle_reason: reason
+            });
+        }
+
+        // Hard safety timeout cap
+        maxTimer = setTimeout(() => {
+            finish("timeout");
+        }, maxWaitMs);
+
+        // Reset quiescence countdown on activity
+        function resetQuietTimer() {
+            if (quietTimer) clearTimeout(quietTimer);
+            quietTimer = setTimeout(() => {
+                finish("quiescence");
+            }, quiescenceMs);
+        }
+
+        // Attach MutationObserver if available in DOM context
+        if (typeof MutationObserver !== "undefined" && typeof document !== "undefined" && (document.body || document.documentElement)) {
+            try {
+                observer = new MutationObserver((mutations) => {
+                    let relevantMutation = false;
+                    for (const m of mutations) {
+                        // Filter out internal AgentSocket HUD updates
+                        if (m.target && (m.target.id === "agentsocket-hud-host" || (m.target.closest && m.target.closest("#agentsocket-hud-host")))) {
+                            continue;
+                        }
+                        relevantMutation = true;
+                        mutationsObserved++;
+                    }
+                    if (relevantMutation) {
+                        resetQuietTimer();
+                    }
+                });
+
+                const targetNode = document.body || document.documentElement;
+                observer.observe(targetNode, {
+                    childList: true,
+                    subtree: true,
+                    attributes: true,
+                    characterData: true
+                });
+            } catch (e) {}
+        }
+
+        // Start initial quiet countdown
+        resetQuietTimer();
+    });
+}
+
+async function executeAtomicAction(payload = {}) {
+    const action = (payload.action || "").toLowerCase();
+    const elementId = payload.element_id !== undefined ? payload.element_id : payload.elementId;
+    const waitSettle = payload.wait_settle !== false && payload.waitSettle !== false;
+    const startTime = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+
+    let actionResult = null;
+
+    switch (action) {
+        case "click":
+            actionResult = actClick(elementId, payload);
+            break;
+        case "type":
+            actionResult = actType(elementId, payload.text, payload);
+            break;
+        case "scroll":
+            actionResult = actScroll(payload.direction, payload.amount);
+            break;
+        case "key_press":
+        case "keypress":
+            actionResult = actKeyPress(payload.key);
+            break;
+        default:
+            throw new Error(`Unsupported atomic action: '${action}'. Supported: click, type, scroll, key_press.`);
+    }
+
+    let settlement = {
+        duration_ms: 0,
+        mutations_observed: 0,
+        network_requests_settled: 0,
+        settle_reason: "skipped"
+    };
+
+    if (waitSettle) {
+        settlement = await waitForSettlement(payload.settlement_options || {});
+    }
+
+    const endTime = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+    const totalDurationMs = Math.round((endTime - startTime) * 10) / 10;
+
+    return {
+        status: "success",
+        action: action,
+        element_id: elementId !== undefined && elementId !== null ? parseInt(elementId, 10) : null,
+        duration_ms: totalDurationMs,
+        mutations_observed: settlement.mutations_observed,
+        network_requests_settled: settlement.network_requests_settled,
+        settle_reason: settlement.settle_reason
+    };
+}
+
+if (typeof window !== "undefined") {
+    window.__agentsocket_act = executeAtomicAction;
+    window.__agentsocket_click = actClick;
+    window.__agentsocket_type = actType;
+    window.__agentsocket_scroll = actScroll;
+    window.__agentsocket_key_press = actKeyPress;
+    window.__agentsocket_wait_settle = waitForSettlement;
 }
 
 // ============================================================================
@@ -1416,7 +1770,13 @@ if (typeof module !== "undefined" && module.exports) {
         traverseAriaTree,
         renderBadges,
         removeBadges,
-        observePage
+        observePage,
+        actClick,
+        actType,
+        actScroll,
+        actKeyPress,
+        waitForSettlement,
+        executeAtomicAction
     };
 }
 
