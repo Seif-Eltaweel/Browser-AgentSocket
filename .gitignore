@@ -62,6 +62,7 @@ server/logs/
 .socket_server.pid
 *.pid
 .socket_server.token
+.socket_server.port
 *TIMELINE*.md
 *timeline*.md
 
