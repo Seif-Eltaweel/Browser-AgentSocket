@@ -385,6 +385,7 @@ def execute_action(
 
 def browser_observe(
     tab_group_id: int | None = None,
+    session_title: str | None = None,
     take_screenshot: bool = False,
     server_url: str = DEFAULT_SERVER_URL,
 ) -> dict[str, Any]:
@@ -392,6 +393,7 @@ def browser_observe(
     ensure_ready(server_url)
     payload = {
         "tab_group_id": tab_group_id,
+        "session_title": session_title,
         "take_screenshot": take_screenshot,
     }
     try:
@@ -408,6 +410,7 @@ def browser_observe(
 def browser_click(
     element_id: int,
     tab_group_id: int | None = None,
+    session_title: str | None = None,
     wait_settle: bool = True,
     server_url: str = DEFAULT_SERVER_URL,
 ) -> dict[str, Any]:
@@ -417,6 +420,7 @@ def browser_click(
         "action": "click",
         "element_id": element_id,
         "tab_group_id": tab_group_id,
+        "session_title": session_title,
         "wait_settle": wait_settle,
     }
     try:
@@ -434,6 +438,7 @@ def browser_type(
     element_id: int,
     text: str,
     tab_group_id: int | None = None,
+    session_title: str | None = None,
     clear_first: bool = False,
     press_enter: bool = False,
     server_url: str = DEFAULT_SERVER_URL,
@@ -445,6 +450,7 @@ def browser_type(
         "element_id": element_id,
         "text": text,
         "tab_group_id": tab_group_id,
+        "session_title": session_title,
         "clear_first": clear_first,
         "press_enter": press_enter,
     }
@@ -463,6 +469,7 @@ def browser_scroll(
     direction: str,
     amount: int | None = None,
     tab_group_id: int | None = None,
+    session_title: str | None = None,
     server_url: str = DEFAULT_SERVER_URL,
 ) -> dict[str, Any]:
     """Scrolls viewport ('down', 'up', 'top', 'bottom')."""
@@ -472,6 +479,7 @@ def browser_scroll(
         "direction": direction,
         "amount": amount,
         "tab_group_id": tab_group_id,
+        "session_title": session_title,
     }
     try:
         resp = requests.post(f"{server_url}/act", json=payload, headers=get_auth_headers(), timeout=20.0)

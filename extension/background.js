@@ -162,7 +162,6 @@ class ResilientSocket {
         };
 
         this.ws.onclose = () => {
-            authorizedSessions.clear();
             const anyOpen = Object.values(activeSockets).some(s => s && s.isOpen && s.isOpen());
             if (!anyOpen) {
                 hideAllGlows();
@@ -235,7 +234,7 @@ class ResilientSocket {
 // ============================================================================
 chrome.storage.local.get(["human_in_control", "agent_servers"], (data) => {
     humanInControl = !!data.human_in_control;
-    authorizedSessions.clear();
+    loadAuthorizedSessions();
     loadActiveSessions();
 
     if (!data.agent_servers) {
@@ -712,13 +711,18 @@ async function handleSocketAction(command, server) {
 }
 
 async function getActiveTabForSession(sessionTitle, tabGroupId) {
-    if (tabGroupId) {
+    if (tabGroupId && Number(tabGroupId) > 0) {
         try {
             const tabs = await chrome.tabs.query({ groupId: Number(tabGroupId), active: true });
             if (tabs && tabs.length > 0) return tabs[0].id;
             const groupTabs = await chrome.tabs.query({ groupId: Number(tabGroupId) });
             if (groupTabs && groupTabs.length > 0) return groupTabs[0].id;
         } catch (e) {}
+    }
+
+    if (sessionTitle) {
+        const titleTabId = await getTargetTabId(sessionTitle);
+        if (titleTabId) return titleTabId;
     }
 
     const sess = activeSessions.get(sessionTitle);
@@ -731,7 +735,7 @@ async function getActiveTabForSession(sessionTitle, tabGroupId) {
         } catch (e) {}
     }
 
-    if (sess && sess.groupId) {
+    if (sess && sess.groupId && sess.groupId > 0) {
         try {
             const tabs = await chrome.tabs.query({ groupId: sess.groupId, active: true });
             if (tabs && tabs.length > 0) return tabs[0].id;
@@ -749,7 +753,8 @@ async function getActiveTabForSession(sessionTitle, tabGroupId) {
 }
 
 async function handleObservePage(command, sessionTitle) {
-    const tabId = await getActiveTabForSession(sessionTitle, command.tab_group_id || command.groupId);
+    const title = sessionTitle || command.session_title;
+    const tabId = await getActiveTabForSession(title, command.tab_group_id || command.groupId);
     if (!tabId) {
         return { status: "error", message: "No active tab found for session observation." };
     }
@@ -760,12 +765,25 @@ async function handleObservePage(command, sessionTitle) {
         });
         return response || { status: "success", elements: [] };
     } catch (err) {
-        return { status: "error", message: `Failed to observe page: ${err.message}` };
+        try {
+            await chrome.scripting.executeScript({
+                target: { tabId: tabId },
+                files: ["protocol.js", "content.js"]
+            });
+            const retryResponse = await chrome.tabs.sendMessage(tabId, {
+                type: MT.OBSERVE_PAGE || "observe_page",
+                options: command.options || (typeof command.target_data === "object" ? command.target_data : {})
+            });
+            return retryResponse || { status: "success", elements: [] };
+        } catch (retryErr) {
+            return { status: "error", message: `Failed to observe page: ${err.message}` };
+        }
     }
 }
 
 async function handleActElement(command, sessionTitle) {
-    const tabId = await getActiveTabForSession(sessionTitle, command.tab_group_id || command.groupId);
+    const title = sessionTitle || command.session_title;
+    const tabId = await getActiveTabForSession(title, command.tab_group_id || command.groupId);
     if (!tabId) {
         return { status: "error", message: "No active tab found for acting on element." };
     }
@@ -777,7 +795,20 @@ async function handleActElement(command, sessionTitle) {
         });
         return response || { status: "success" };
     } catch (err) {
-        return { status: "error", message: `Failed to act on element: ${err.message}` };
+        try {
+            await chrome.scripting.executeScript({
+                target: { tabId: tabId },
+                files: ["protocol.js", "content.js"]
+            });
+            const payload = command.payload || (typeof command.target_data === "object" ? command.target_data : command);
+            const retryResponse = await chrome.tabs.sendMessage(tabId, {
+                type: MT.ACT_ELEMENT || "act_element",
+                payload: payload
+            });
+            return retryResponse || { status: "success" };
+        } catch (retryErr) {
+            return { status: "error", message: `Failed to act on element: ${err.message}` };
+        }
     }
 }
 

@@ -641,6 +641,7 @@ async def extension_endpoint(websocket: WebSocket) -> None:
             ):
                 cmd_id = message.get("request_id") or message.get("command_id") or message.get("id")
                 fut = state.find_pending_future(cmd_id)
+                logger.info(f"Incoming WS response frame: type={msg_type}, id={cmd_id}, fut_found={fut is not None}")
                 if fut and not fut.done():
                     fut.set_result(message.get("payload") if "payload" in message else message)
 
@@ -894,8 +895,12 @@ async def execute_to_extension(command: AgentActionPayload) -> dict[str, Any]:
 # Atomic OODA RPC Dispatch Handlers (Spec 23)
 # ============================================================================
 
-async def observe_page(tab_group_id: int | None = None, take_screenshot: bool = False) -> dict[str, Any]:
+async def observe_page(tab_group_id: int | None = None, take_screenshot: bool = False, session_title: str | None = None) -> dict[str, Any]:
     state.record_activity()
+    if tab_group_id is None and session_title:
+        active_sess = session_manager.get_active_session_by_title(session_title)
+        if active_sess:
+            tab_group_id = active_sess.tab_group_id
     session = state.get_session(tab_group_id)
 
     if session.human_in_control:
@@ -935,12 +940,15 @@ async def observe_page(tab_group_id: int | None = None, take_screenshot: bool = 
     state.pending_responses[request_id] = fut
 
     outbound_frame = {
-        "type": WSMessageType.OBSERVE_PAGE.value,
+        "type": WSMessageType.EXECUTE_ACTION.value,
+        "action_type": ActionType.OBSERVE_PAGE.value,
         "request_id": request_id,
         "id": request_id,
         "command_id": request_id,
         "tab_group_id": session.tab_group_id,
+        "session_title": session_title,
         "take_screenshot": take_screenshot,
+        "target_data": {"take_screenshot": take_screenshot},
         "options": {"take_screenshot": take_screenshot},
     }
 
@@ -948,9 +956,10 @@ async def observe_page(tab_group_id: int | None = None, take_screenshot: bool = 
         await state.extension_ws.send_text(json.dumps(outbound_frame))
         result = await asyncio.wait_for(fut, timeout=15.0)
 
+        logger.info(f"observe_page fut resolved with result: {result}")
         if isinstance(result, dict):
             status = result.get("status", "success")
-            return {
+            res_dict = {
                 "status": status,
                 "url": result.get("url", ""),
                 "title": result.get("title", ""),
@@ -959,6 +968,11 @@ async def observe_page(tab_group_id: int | None = None, take_screenshot: bool = 
                 "elements": result.get("elements", []),
                 "screenshot_path": result.get("screenshot_path", result.get("screenshotPath")),
             }
+            if "message" in result:
+                res_dict["message"] = result["message"]
+            if "error" in result:
+                res_dict["error"] = result["error"]
+            return res_dict
         return {"status": "success", "data": result}
     except asyncio.TimeoutError:
         return {
@@ -980,6 +994,10 @@ async def observe_page(tab_group_id: int | None = None, take_screenshot: bool = 
 
 async def act_element(payload: ActRequest) -> dict[str, Any]:
     state.record_activity()
+    if payload.tab_group_id is None and payload.session_title:
+        active_sess = session_manager.get_active_session_by_title(payload.session_title)
+        if active_sess:
+            payload.tab_group_id = active_sess.tab_group_id
     session = state.get_session(payload.tab_group_id)
 
     if session.human_in_control:
@@ -1023,11 +1041,14 @@ async def act_element(payload: ActRequest) -> dict[str, Any]:
     state.pending_responses[request_id] = fut
 
     outbound_frame = {
-        "type": WSMessageType.ACT_ELEMENT.value,
+        "type": WSMessageType.EXECUTE_ACTION.value,
+        "action_type": ActionType.ACT_ELEMENT.value,
         "request_id": request_id,
         "id": request_id,
         "command_id": request_id,
         "tab_group_id": session.tab_group_id,
+        "session_title": payload.session_title,
+        "target_data": payload.model_dump(),
         "payload": payload.model_dump(),
         "action": payload.action,
         "element_id": payload.element_id,
@@ -1277,7 +1298,7 @@ async def finalize_task_complete(
 @app.post("/observe")
 async def observe_endpoint(payload: ObserveRequest) -> dict[str, Any]:
     state.record_activity()
-    return await observe_page(tab_group_id=payload.tab_group_id, take_screenshot=payload.take_screenshot)
+    return await observe_page(tab_group_id=payload.tab_group_id, take_screenshot=payload.take_screenshot, session_title=payload.session_title)
 
 
 @app.post("/act")

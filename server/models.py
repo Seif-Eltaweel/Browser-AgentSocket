@@ -111,6 +111,7 @@ class ReleasePayload(BaseModel):
 
 class ObserveRequest(BaseModel):
     tab_group_id: int | None = None
+    session_title: str | None = None
     take_screenshot: bool = False
 
 
@@ -126,6 +127,7 @@ class ObserveResponse(BaseModel):
 
 class ActRequest(BaseModel):
     tab_group_id: int | None = None
+    session_title: str | None = None
     action: str  # "click", "type", "scroll", "key_press"
     element_id: int | None = None
     text: str | None = None
