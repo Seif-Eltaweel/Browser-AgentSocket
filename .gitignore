@@ -56,6 +56,9 @@ specs/
 # AgentSocket Runtime Logs, Sessions & Artifacts (Keep private & uncommitted)
 server/logs/
 *.jsonl
+*.db
+*.db-wal
+*.db-shm
 .socket_server.pid
 *.pid
 .socket_server.token

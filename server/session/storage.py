@@ -11,7 +11,9 @@ import tempfile
 import time
 from datetime import datetime
 from typing import Any
+import yaml
 
+from server.db import init_db, get_connection, DB_PATH
 from server.logger import logger
 from server.models import (
     MonthlyIndexModel,
@@ -51,10 +53,18 @@ class SessionStorage:
         base_log_dir: str = DEFAULT_BASE_LOG_DIR,
         subskills_dir: str | None = None,
         adhocs_dir: str | None = None,
+        db_path: str | None = None,
     ):
         self.base_log_dir = os.path.abspath(base_log_dir)
         self.history_index_dir = os.path.join(self.base_log_dir, "sessions", "history_logs")
         self.index_file = os.path.join(self.history_index_dir, "index.json")
+
+        if db_path:
+            self.db_path = os.path.abspath(db_path)
+        elif os.path.abspath(base_log_dir) == os.path.abspath(DEFAULT_BASE_LOG_DIR):
+            self.db_path = DB_PATH
+        else:
+            self.db_path = os.path.join(self.base_log_dir, "agentsocket.db")
 
         if subskills_dir:
             self.subskills_dir = os.path.abspath(subskills_dir)
@@ -74,13 +84,12 @@ class SessionStorage:
         self.ensure_directories()
 
     def ensure_directories(self) -> None:
-        """Ensures all base log, vault, and index directories exist on disk."""
+        """Ensures all base log, vault, and database connections are initialized."""
         os.makedirs(self.history_index_dir, exist_ok=True)
         os.makedirs(self.base_log_dir, exist_ok=True)
         os.makedirs(self.subskills_dir, exist_ok=True)
         os.makedirs(self.adhocs_dir, exist_ok=True)
-        if not os.path.exists(self.index_file):
-            self.write_index(MonthlyIndexModel())
+        init_db(self.db_path)
         if not os.path.exists(self.subskills_index_file):
             self._migrate_or_init_subskills_index()
 
@@ -156,36 +165,86 @@ class SessionStorage:
         }
 
     def read_manifest(self, session_dir: str) -> SessionManifestModel | None:
-        """Reads and validates session_manifest.json."""
+        """Reads and validates manifest from YAML frontmatter in SESSION_DOCUMENT.md."""
+        doc_path = os.path.join(session_dir, "SESSION_DOCUMENT.md")
+        if os.path.exists(doc_path):
+            try:
+                with open(doc_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                if content.startswith("---"):
+                    parts = content.split("---", 2)
+                    if len(parts) >= 3:
+                        frontmatter_str = parts[1]
+                        data = yaml.safe_load(frontmatter_str)
+                        if isinstance(data, dict):
+                            if "session_title" not in data and "tab_group_name" in data:
+                                data["session_title"] = data["tab_group_name"]
+                            elif "tab_group_name" not in data and "session_title" in data:
+                                data["tab_group_name"] = data["session_title"]
+                            return SessionManifestModel.model_validate(data)
+            except Exception as e:
+                logger.warning(f"Failed to parse YAML frontmatter from SESSION_DOCUMENT.md: {e}")
+
+        # Legacy fallback to session_manifest.json
         manifest_path = os.path.join(session_dir, "session_manifest.json")
-        if not os.path.exists(manifest_path):
-            return None
-        try:
-            with open(manifest_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            return SessionManifestModel.model_validate(data)
-        except Exception as e:
-            logger.warning(f"Failed to read session_manifest.json: {e}")
-            return None
+        if os.path.exists(manifest_path):
+            try:
+                with open(manifest_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                return SessionManifestModel.model_validate(data)
+            except Exception as e:
+                logger.warning(f"Failed to read session_manifest.json: {e}")
+                return None
+        return None
 
     def write_manifest(self, session_dir: str, manifest_model: SessionManifestModel) -> None:
-        """Atomically writes session_manifest.json."""
-        manifest_path = os.path.join(session_dir, "session_manifest.json")
+        """Atomically writes manifest to YAML frontmatter in SESSION_DOCUMENT.md."""
+        doc_path = os.path.join(session_dir, "SESSION_DOCUMENT.md")
         os.makedirs(session_dir, exist_ok=True)
+
+        body = ""
+        if os.path.exists(doc_path):
+            try:
+                with open(doc_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                if content.startswith("---"):
+                    parts = content.split("---", 2)
+                    if len(parts) >= 3:
+                        body = parts[2].lstrip("\r\n")
+                    else:
+                        body = ""
+                else:
+                    body = content
+            except Exception:
+                body = ""
+
+        if not body:
+            title = manifest_model.tab_group_name or manifest_model.session_title
+            status_str = str(manifest_model.status or "active").upper()
+            body = (
+                f"# 📜 Session Document: `{title}`\n\n"
+                f"> **Session ID:** `{manifest_model.session_id}`  \n"
+                f"> **Status:** `{status_str}`  \n"
+            )
+
+        frontmatter_dict = manifest_model.model_dump(mode="json", exclude_none=True)
+        frontmatter_yaml = yaml.dump(frontmatter_dict, sort_keys=False, default_flow_style=False)
+        new_content = f"---\n{frontmatter_yaml}---\n\n{body}\n"
+
         temp_fd, temp_path = tempfile.mkstemp(
             dir=session_dir,
-            prefix="mnf_",
+            prefix="doc_",
             suffix=".tmp",
             text=True,
         )
         try:
             with open(temp_fd, "w", encoding="utf-8") as f:
-                f.write(manifest_model.model_dump_json(indent=2))
+                f.write(new_content)
                 f.flush()
                 os.fsync(f.fileno())
-            os.replace(temp_path, manifest_path)
+            os.replace(temp_path, doc_path)
         except Exception as e:
-            logger.error(f"Error writing atomic session_manifest.json: {e}")
+            logger.error(f"Error writing YAML frontmatter to SESSION_DOCUMENT.md: {e}")
             if os.path.exists(temp_path):
                 try:
                     os.remove(temp_path)
@@ -193,43 +252,58 @@ class SessionStorage:
                     pass
 
     # ========================================================================
-    # Index Reading & Atomic Writing
+    # Index Reading & Atomic Writing (SQLite & Backward-Compatibility)
     # ========================================================================
     def read_index(self) -> MonthlyIndexModel:
-        """Reads and validates the monthly master index from index.json."""
-        if not os.path.exists(self.index_file):
-            return MonthlyIndexModel()
+        """
+        Reads and builds MonthlyIndexModel dynamically from SQLite sessions table.
+        Eliminates reading index.json file while preserving full backward compatibility.
+        """
+        model = MonthlyIndexModel()
         try:
-            with open(self.index_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            return MonthlyIndexModel.model_validate(data)
+            with get_connection(self.db_path) as conn:
+                cursor = conn.execute("SELECT * FROM sessions ORDER BY start_time DESC")
+                rows = cursor.fetchall()
+                for r in rows:
+                    d = dict(r)
+                    start_t = d.get("start_time") or time.time()
+                    dt = datetime.fromtimestamp(start_t)
+                    month_key = dt.strftime("%Y-%m")
+                    status_raw = d.get("status") or "active"
+                    summary = SessionSummaryModel(
+                        session_id=d.get("session_id", ""),
+                        session_title=d.get("tab_group_name") or d.get("session_id", ""),
+                        tab_group_id=d.get("tab_group_id") or 0,
+                        tab_group_name=d.get("tab_group_name") or "",
+                        agent_name=d.get("agent_name") or "AgentSocket Local",
+                        group_color=d.get("group_color") or "purple",
+                        status=status_raw,
+                        start_time=start_t,
+                        end_time=d.get("end_time"),
+                        duration_ms=d.get("duration_ms", 0.0),
+                        event_count=d.get("event_count", 0),
+                        action_count=d.get("action_count", 0),
+                        takeover_count=d.get("takeover_count", 0),
+                        session_path=d.get("session_path", ""),
+                        artifacts_count=d.get("artifacts_count", 0),
+                        end_reason=d.get("end_reason"),
+                    )
+                    if month_key not in model.months:
+                        model.months[month_key] = []
+                    model.months[month_key].append(summary)
         except Exception as e:
-            logger.warning(f"Failed to read index.json: {e}")
-            return MonthlyIndexModel()
-
-    def write_index(self, index_model: MonthlyIndexModel) -> None:
-        """Atomically writes index.json via temporary file and replace."""
-        index_model.updated_at = time.time()
-        os.makedirs(os.path.dirname(self.index_file), exist_ok=True)
-        temp_fd, temp_path = tempfile.mkstemp(
-            dir=os.path.dirname(self.index_file),
-            prefix="idx_",
-            suffix=".tmp",
-            text=True,
-        )
-        try:
-            with open(temp_fd, "w", encoding="utf-8") as f:
-                f.write(index_model.model_dump_json(indent=2))
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(temp_path, self.index_file)
-        except Exception as e:
-            logger.error(f"Error writing atomic index.json: {e}")
-            if os.path.exists(temp_path):
+            logger.warning(f"Failed to read sessions from SQLite: {e}")
+            if os.path.exists(self.index_file):
                 try:
-                    os.remove(temp_path)
+                    with open(self.index_file, "r", encoding="utf-8") as f:
+                        return MonthlyIndexModel.model_validate(json.load(f))
                 except Exception:
                     pass
+        return model
+
+    def write_index(self, index_model: MonthlyIndexModel) -> None:
+        """Deprecated: No-op to eliminate index.json disk thrashing."""
+        pass
 
     def read_subskills_index(self) -> SubskillsIndexModel:
         """Reads and validates subskills_index.json."""
@@ -244,7 +318,7 @@ class SessionStorage:
             return SubskillsIndexModel()
 
     def write_subskills_index(self, index_model: SubskillsIndexModel) -> None:
-        """Atomically writes subskills_index.json."""
+        """Atomically writes subskills_index.json and syncs to SQLite subskills table."""
         index_model.updated_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         os.makedirs(os.path.dirname(self.subskills_index_file), exist_ok=True)
         temp_fd, temp_path = tempfile.mkstemp(
@@ -267,42 +341,93 @@ class SessionStorage:
                 except Exception:
                     pass
 
+        # Sync to SQLite subskills table
+        try:
+            with get_connection(self.db_path) as conn:
+                for slug, sk in index_model.subskills.items():
+                    tags_str = ",".join(sk.tags) if sk.tags else ""
+                    conn.execute("""
+                        INSERT INTO subskills (slug, display_title, description, tags, times_referenced, playbook_path, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                        ON CONFLICT(slug) DO UPDATE SET
+                            display_title = excluded.display_title,
+                            description = excluded.description,
+                            tags = excluded.tags,
+                            times_referenced = excluded.times_referenced,
+                            playbook_path = excluded.playbook_path,
+                            updated_at = CURRENT_TIMESTAMP;
+                    """, (
+                        slug,
+                        sk.display_title,
+                        sk.description,
+                        tags_str,
+                        sk.times_borrowed,
+                        sk.vault_path or f"server/subskills/{slug}",
+                    ))
+        except Exception as e:
+            logger.warning(f"Error syncing subskills to SQLite: {e}")
+
     def update_index_for_session(self, session: Any) -> None:
-        """Upserts a session's summary in the monthly master index."""
-        index_model = self.read_index()
-        dt = datetime.fromtimestamp(session.start_time)
-        month_key = dt.strftime("%Y-%m")
+        """Atomic O(1) upsert into SQLite. Eliminates index.json disk thrashing."""
+        title = getattr(session, "tab_group_name", None) or getattr(session, "session_title", "")
+        status_str = session.status.value if hasattr(session.status, "value") else str(session.status)
+        with get_connection(self.db_path) as conn:
+            conn.execute("""
+                INSERT INTO sessions (
+                    session_id, tab_group_id, tab_group_name, group_color, agent_name,
+                    status, start_time, end_time, duration_ms, event_count,
+                    action_count, takeover_count, session_path, artifacts_count, end_reason, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(session_id) DO UPDATE SET
+                    tab_group_name = excluded.tab_group_name,
+                    group_color = excluded.group_color,
+                    agent_name = excluded.agent_name,
+                    status = excluded.status,
+                    end_time = excluded.end_time,
+                    duration_ms = excluded.duration_ms,
+                    event_count = excluded.event_count,
+                    action_count = excluded.action_count,
+                    takeover_count = excluded.takeover_count,
+                    artifacts_count = excluded.artifacts_count,
+                    end_reason = excluded.end_reason,
+                    updated_at = CURRENT_TIMESTAMP;
+            """, (
+                session.session_id,
+                session.tab_group_id,
+                title,
+                getattr(session, "group_color", "purple"),
+                getattr(session, "agent_name", "AgentSocket Local"),
+                status_str,
+                session.start_time,
+                session.end_time,
+                session.duration_ms or 0.0,
+                session.event_count,
+                session.action_count,
+                session.takeover_count,
+                session.session_path,
+                session.artifacts_count,
+                session.end_reason,
+            ))
 
-        summary = SessionSummaryModel(
-            session_id=session.session_id,
-            session_title=session.session_title,
-            tab_group_id=session.tab_group_id,
-            tab_group_name=session.tab_group_name,
-            agent_name=session.agent_name,
-            group_color=session.group_color,
-            status=session.status,
-            start_time=session.start_time,
-            end_time=session.end_time,
-            duration_ms=session.duration_ms,
-            event_count=session.event_count,
-            action_count=session.action_count,
-            takeover_count=session.takeover_count,
-            session_path=session.session_path,
-            artifacts_count=session.artifacts_count,
-            end_reason=session.end_reason,
-        )
-
-        if month_key not in index_model.months:
-            index_model.months[month_key] = []
-
-        existing_list = index_model.months[month_key]
-        idx = next((i for i, s in enumerate(existing_list) if s.session_id == session.session_id), None)
-        if idx is not None:
-            existing_list[idx] = summary
-        else:
-            existing_list.append(summary)
-
-        self.write_index(index_model)
+    def log_event_index(
+        self,
+        event_id: str,
+        session_id: str,
+        event_type: str,
+        timestamp: float,
+        duration_ms: float | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        """Fast indexed insert into SQLite events table."""
+        payload_json = json.dumps(payload) if payload else None
+        try:
+            with get_connection(self.db_path) as conn:
+                conn.execute("""
+                    INSERT INTO events (event_id, session_id, event_type, timestamp, duration_ms, payload_json)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (event_id, session_id, event_type, timestamp, duration_ms, payload_json))
+        except Exception as e:
+            logger.debug(f"SQLite event index insert skipped/failed: {e}")
 
     def query_history(
         self,
@@ -310,28 +435,23 @@ class SessionStorage:
         month: str | None = None,
         limit: int = 10,
     ) -> list[dict[str, Any]]:
-        """
-        Scans index.json for matching session titles, tab groups, status, or date keywords.
-        Returns lightweight summaries sorted newest first.
-        """
-        index_model = self.read_index()
-        results: list[SessionSummaryModel] = []
+        """Fast indexed SQL query replacing full JSON file scans."""
+        with get_connection(self.db_path) as conn:
+            if query_hint:
+                pattern = f"%{query_hint}%"
+                cursor = conn.execute("""
+                    SELECT * FROM sessions 
+                    WHERE tab_group_name LIKE ? OR session_id LIKE ? OR agent_name LIKE ? OR status LIKE ?
+                    ORDER BY start_time DESC LIMIT ?
+                """, (pattern, pattern, pattern, pattern, limit))
+            else:
+                cursor = conn.execute("SELECT * FROM sessions ORDER BY start_time DESC LIMIT ?", (limit,))
 
-        target_months = [month] if month and month in index_model.months else list(index_model.months.keys())
-        query_hint_lower = query_hint.lower().strip()
-
-        for m in target_months:
-            summaries = index_model.months.get(m, [])
-            for s in summaries:
-                if not query_hint_lower:
-                    results.append(s)
-                else:
-                    searchable = f"{s.session_id} {s.session_title} {s.tab_group_name} {s.status} {s.agent_name} {s.session_path} {s.end_reason or ''}".lower()
-                    if query_hint_lower in searchable:
-                        results.append(s)
-
-        results.sort(key=lambda s: s.start_time, reverse=True)
-        return [s.model_dump() for s in results[:limit]]
+            rows = [dict(row) for row in cursor.fetchall()]
+            for r in rows:
+                if "session_title" not in r or not r["session_title"]:
+                    r["session_title"] = r.get("tab_group_name", "")
+            return rows
 
     def get_session_details(self, session_path: str, formatter_fn: Any | None = None) -> dict[str, Any]:
         """

@@ -125,6 +125,16 @@ def format_session_thread(
             icon_type = "🗂️ SUBSKILL_REG"
         elif etype == "error":
             icon_type = "❌ ERROR"
+        elif etype in ("observe", "observe_page"):
+            icon_type = "👁️ OBSERVE"
+        elif etype in ("click", "click_element"):
+            icon_type = "🖱️ CLICK"
+        elif etype in ("type", "type_text"):
+            icon_type = "⌨️ TYPE"
+        elif etype in ("act_element", "act"):
+            icon_type = "🎯 ACT_ELEMENT"
+        elif etype in ("browser_screenshot", "screenshot"):
+            icon_type = "📸 SCREENSHOT"
         elif etype == "session_end":
             status_val = str(payload.get("status", "completed")).lower()
             if status_val in ("completed", "success"):
@@ -205,6 +215,22 @@ def format_session_thread(
                     details = f"{notes}"
             else:
                 details = "Resumed automation context"
+        elif etype in ("observe", "observe_page"):
+            nodes = payload.get("nodes")
+            details = f"DOM snapshot ({nodes} nodes)" if nodes else (title or "Observe page")
+        elif etype in ("click", "click_element"):
+            eid = payload.get("id") or payload.get("element_id") or payload.get("selector") or ""
+            details = f"Element #{eid}" if eid else (title or "Click element")
+        elif etype in ("type", "type_text"):
+            txt = payload.get("text", "")
+            eid = payload.get("id") or payload.get("element_id") or ""
+            details = f"Typed '{txt}' into #{eid}" if eid else (f"Typed '{txt}'" if txt else (title or "Type input"))
+        elif etype in ("browser_screenshot", "screenshot"):
+            details = title or "Captured viewport screenshot"
+        elif etype in ("act_element", "act"):
+            action = payload.get("action", "")
+            eid = payload.get("id") or payload.get("element_id") or ""
+            details = f"{action.upper()} on element #{eid}" if (action and eid) else (title or "Act on element")
         elif etype == "subskill_borrowed":
             sk_name = payload.get("subskill_name") or title.replace("Borrowed Subskill: ", "").strip()
             src = payload.get("source_session") or ""

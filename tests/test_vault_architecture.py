@@ -59,6 +59,7 @@ class TestVaultArchitecture(unittest.TestCase):
         sess = self.manager.get_or_create_session(tab_group_id=10, tab_group_name="Init Run")
         with open(os.path.join(sess.session_dir, "sub_skill.md"), "w", encoding="utf-8") as f:
             f.write("# Tested Subskill Playbook\nVerified selectors: `.btn`")
+        os.makedirs(sess.adhocs_dir, exist_ok=True)
         with open(os.path.join(sess.adhocs_dir, "custom_extractor.py"), "w", encoding="utf-8") as f:
             f.write("# Custom extractor\nprint('extracted')\n")
 
@@ -111,7 +112,7 @@ class TestVaultArchitecture(unittest.TestCase):
 
         # Check playbook copied and manifest created
         self.assertTrue(os.path.isfile(os.path.join(target_dir, "sub_skill.md")))
-        self.assertTrue(os.path.isfile(os.path.join(target_dir, "session_manifest.json")))
+        self.assertTrue(os.path.isfile(os.path.join(target_dir, "SESSION_DOCUMENT.md")))
 
         # Check tool resolution works from central vault
         resolved = self.manager.resolve_adhoc("custom_extractor.py", target_dir)
@@ -128,6 +129,7 @@ class TestVaultArchitecture(unittest.TestCase):
         sess = self.manager.get_or_create_session(tab_group_id=50, tab_group_name="Master Session")
         with open(os.path.join(sess.session_dir, "sub_skill.md"), "w", encoding="utf-8") as f:
             f.write("# Master Playbook")
+        os.makedirs(sess.adhocs_dir, exist_ok=True)
         for tool_name in ["tool_a.py", "tool_b.py", "tool_c.py"]:
             with open(os.path.join(sess.adhocs_dir, tool_name), "w", encoding="utf-8") as f:
                 f.write(f"# {tool_name}\n")
@@ -151,21 +153,22 @@ class TestVaultArchitecture(unittest.TestCase):
 
         # Verify each of the 10 sessions has a manifest, but 0 adhoc script duplicates
         for s_dir in session_dirs:
-            manifest_path = os.path.join(s_dir, "session_manifest.json")
-            self.assertTrue(os.path.isfile(manifest_path))
+            doc_path = os.path.join(s_dir, "SESSION_DOCUMENT.md")
+            self.assertTrue(os.path.isfile(doc_path))
 
             # Read manifest
-            with open(manifest_path, "r", encoding="utf-8") as mf:
-                m_data = json.load(mf)
-            self.assertEqual(len(m_data["borrowed_subskills"]), 1)
-            self.assertEqual(m_data["borrowed_subskills"][0]["name"], "multi-tool-skill")
-            self.assertEqual(m_data["borrowed_subskills"][0]["referenced_adhocs"], ["tool_a.py", "tool_b.py", "tool_c.py"])
+            manifest = self.manager.storage.read_manifest(s_dir)
+            self.assertEqual(len(manifest.borrowed_subskills), 1)
+            self.assertEqual(manifest.borrowed_subskills[0].name, "multi-tool-skill")
+            self.assertEqual(manifest.borrowed_subskills[0].referenced_adhocs, ["tool_a.py", "tool_b.py", "tool_c.py"])
 
             # Verify adhocs directory in session contains ZERO copies of tool_a, tool_b, tool_c
-            adhocs_in_session = os.listdir(os.path.join(s_dir, "adhocs"))
-            self.assertNotIn("tool_a.py", adhocs_in_session)
-            self.assertNotIn("tool_b.py", adhocs_in_session)
-            self.assertNotIn("tool_c.py", adhocs_in_session)
+            adhocs_dir = os.path.join(s_dir, "adhocs")
+            if os.path.exists(adhocs_dir):
+                adhocs_in_session = os.listdir(adhocs_dir)
+                self.assertNotIn("tool_a.py", adhocs_in_session)
+                self.assertNotIn("tool_b.py", adhocs_in_session)
+                self.assertNotIn("tool_c.py", adhocs_in_session)
 
             # Yet resolution works seamlessly for each
             for t_name in ["tool_a.py", "tool_b.py", "tool_c.py"]:
@@ -189,6 +192,7 @@ class TestVaultArchitecture(unittest.TestCase):
         sess1 = self.manager.get_or_create_session(tab_group_id=70, tab_group_name="Subskill Source")
         with open(os.path.join(sess1.session_dir, "sub_skill.md"), "w", encoding="utf-8") as f:
             f.write("# Subskill Playbook")
+        os.makedirs(sess1.adhocs_dir, exist_ok=True)
         with open(os.path.join(sess1.adhocs_dir, "shared_name.py"), "w", encoding="utf-8") as f:
             f.write("# Subskill shared_name\nprint('from subskill')\n")
         with open(os.path.join(sess1.adhocs_dir, "subskill_only.py"), "w", encoding="utf-8") as f:
@@ -221,6 +225,7 @@ class TestVaultArchitecture(unittest.TestCase):
 
         # Case C: Create a local override in session/adhocs/shared_name.py -> resolves to local override!
         local_override_path = os.path.join(target_dir, "adhocs", "shared_name.py")
+        os.makedirs(os.path.dirname(local_override_path), exist_ok=True)
         with open(local_override_path, "w", encoding="utf-8") as f:
             f.write("# Local override shared_name\nprint('from local override')\n")
 
@@ -241,6 +246,7 @@ class TestVaultArchitecture(unittest.TestCase):
         permanent vault immediately, rejecting syntax errors.
         """
         sess = self.manager.get_or_create_session(tab_group_id=80, tab_group_name="Promotion Session")
+        os.makedirs(sess.adhocs_dir, exist_ok=True)
 
         # 1. Broken syntax file
         broken_tool = os.path.join(sess.adhocs_dir, "broken_syntax.py")
@@ -302,6 +308,7 @@ class TestVaultArchitecture(unittest.TestCase):
     def test_run_adhoc_execution(self):
         """Verify executing an adhoc tool via run_adhoc subprocess runner."""
         sess = self.manager.get_or_create_session(tab_group_id=90, tab_group_name="Runner Session")
+        os.makedirs(sess.adhocs_dir, exist_ok=True)
         local_script = os.path.join(sess.adhocs_dir, "runner_test.py")
         with open(local_script, "w", encoding="utf-8") as f:
             f.write("import sys\nprint('Hello ' + ' '.join(sys.argv[1:]))\n")

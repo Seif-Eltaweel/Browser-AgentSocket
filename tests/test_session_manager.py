@@ -468,6 +468,12 @@ class TestSessionManager(unittest.TestCase):
         )
         self.mgr.finalize_session(777, SessionStatus.COMPLETED)
 
+        from server.session.documenter import SessionDocumenter
+        SessionDocumenter.generate_thread_document(
+            self.mgr.get_session_paths(session.session_dir),
+            format_session_thread,
+        )
+
         thread_path = os.path.join(session.session_dir, "THREAD.md")
         doc_path = os.path.join(session.session_dir, "SESSION_DOCUMENT.md")
 

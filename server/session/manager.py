@@ -75,7 +75,48 @@ def seed_universal_adhocs(session_adhoc_dir: str) -> list[str]:
                     seeded.append(filename)
                 except Exception as e:
                     logger.warning(f"Failed to seed adhoc tool {filename}: {e}")
-    return seeded
+
+SENSITIVE_KEY_PATTERN = re.compile(
+    r"(password|passwd|token|secret|cvv|cvc|api_key|apikey|auth_token|access_token|private_key|credentials)",
+    re.IGNORECASE,
+)
+
+
+def redact_sensitive_payload(val: Any) -> Any:
+    """Recursively redacts sensitive keys and values with [REDACTED] (Spec 25 Zero-Knowledge)."""
+    if isinstance(val, dict):
+        redacted: dict[str, Any] = {}
+        for k, v in val.items():
+            k_str = str(k)
+            if SENSITIVE_KEY_PATTERN.search(k_str):
+                redacted[k] = "[REDACTED]"
+            elif isinstance(v, (dict, list)):
+                redacted[k] = redact_sensitive_payload(v)
+            else:
+                redacted[k] = v
+
+        selector_or_field = (
+            str(val.get("selector", ""))
+            + " "
+            + str(val.get("input_type", ""))
+            + " "
+            + str(val.get("name", ""))
+            + " "
+            + str(val.get("field", ""))
+            + " "
+            + str(val.get("label", ""))
+            + " "
+            + str(val.get("id", ""))
+        )
+        if SENSITIVE_KEY_PATTERN.search(selector_or_field):
+            if "text" in redacted:
+                redacted["text"] = "[REDACTED]"
+            if "value" in redacted:
+                redacted["value"] = "[REDACTED]"
+        return redacted
+    elif isinstance(val, list):
+        return [redact_sensitive_payload(item) for item in val]
+    return val
 
 
 @dataclass
@@ -435,11 +476,13 @@ class SessionManager:
         base_log_dir: str = DEFAULT_BASE_LOG_DIR,
         subskills_dir: str | None = None,
         adhocs_dir: str | None = None,
+        db_path: str | None = None,
     ):
         self.storage = SessionStorage(
             base_log_dir=base_log_dir,
             subskills_dir=subskills_dir,
             adhocs_dir=adhocs_dir,
+            db_path=db_path,
         )
         self.base_log_dir = self.storage.base_log_dir
         self.history_index_dir = self.storage.history_index_dir
@@ -546,18 +589,23 @@ class SessionManager:
         output_dir = os.path.join(session_dir, "output")
         jsonl_path = os.path.join(session_dir, "session.jsonl")
 
+        os.makedirs(session_dir, exist_ok=True)
         os.makedirs(artifacts_dir, exist_ok=True)
-        os.makedirs(adhocs_dir, exist_ok=True)
         os.makedirs(input_dir, exist_ok=True)
         os.makedirs(output_dir, exist_ok=True)
 
-        # Initialize session manifest (Spec 18: Lean Staging, zero redundant tool copying)
+        # Initialize session manifest in YAML frontmatter of SESSION_DOCUMENT.md (Spec 25)
         manifest = self.storage.read_manifest(session_dir)
         if not manifest:
             manifest = SessionManifestModel(
                 session_id=session_id,
                 session_title=session_title,
                 tab_group_id=tab_group_id,
+                tab_group_name=tab_group_name,
+                group_color=group_color,
+                agent_name=agent_name,
+                mode="direct",
+                status=SessionStatus.ACTIVE.value,
                 created_at=datetime.fromtimestamp(now).strftime("%Y-%m-%dT%H:%M:%SZ"),
             )
             self.storage.write_manifest(session_dir, manifest)
@@ -648,7 +696,7 @@ class SessionManager:
         event_id = f"evt_{uuid.uuid4().hex[:8]}"
 
         artifact_link = None
-        processed_payload = payload.copy() if payload else {}
+        processed_payload = redact_sensitive_payload(payload.copy()) if payload else {}
 
         # 1. Check for Screenshot to Save
         if screenshot_bytes:
@@ -678,7 +726,7 @@ class SessionManager:
                 offload_reason = f"Array length {len(result_val)} exceeds 50-item threshold"
 
             if should_offload:
-                action_name = event_type.value
+                action_name = event_type.value if hasattr(event_type, "value") else str(event_type)
                 artifact_filename = f"{action_name}_{event_id}.json"
                 artifact_path = os.path.join(session.artifacts_dir, artifact_filename)
                 try:
@@ -736,6 +784,16 @@ class SessionManager:
                     pass
         except Exception as e:
             logger.error(f"Error writing to session.jsonl: {e}")
+
+        # Index event in SQLite events table (Spec 25)
+        self.storage.log_event_index(
+            event_id=event_id,
+            session_id=session.session_id,
+            event_type=event_type.value if hasattr(event_type, "value") else str(event_type),
+            timestamp=start_time,
+            duration_ms=duration_ms,
+            payload=processed_payload,
+        )
 
         # Update session counters
         session.event_count += 1
@@ -1192,7 +1250,6 @@ rate_limit_pause_range: [3.0, 6.0]
         target_paths = self.get_session_paths(target_dir)
         os.makedirs(target_paths["input_dir"], exist_ok=True)
         os.makedirs(target_paths["output_dir"], exist_ok=True)
-        os.makedirs(target_paths["adhocs_dir"], exist_ok=True)
         os.makedirs(target_paths["artifacts_dir"], exist_ok=True)
 
         borrowed_files: list[str] = []

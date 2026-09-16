@@ -10,6 +10,7 @@ import re
 import time
 from datetime import datetime
 from typing import Any, Callable
+import yaml
 
 from server.logger import logger
 from server.models import MonthlyIndexModel, SessionStatus
@@ -27,22 +28,21 @@ class SessionDocumenter:
     ) -> str:
         """
         Constructs and writes a consolidated master Markdown document (SESSION_DOCUMENT.md)
-        containing executive summary, subskill playbook, input/output inventories,
-        adhoc tools, artifacts, and chronological execution timeline thread.
+        fusing YAML frontmatter with executive summary, subskill playbook, input/output inventories,
+        artifacts, and chronological execution timeline thread (Spec 25).
         """
         session_dir = paths["session_dir"]
         session_path = paths["session_path"]
         input_dir = paths["input_dir"]
         output_dir = paths["output_dir"]
-        adhocs_dir = paths["adhocs_dir"]
+        adhocs_dir = paths.get("adhocs_dir") or os.path.join(session_dir, "adhocs")
         artifacts_dir = paths["artifacts_dir"]
         jsonl_path = paths["jsonl_path"]
         sub_skill_path = paths["sub_skill_path"]
 
-        # Ensure all folders exist
+        # Ensure all required folders exist (adhocs_dir is deprecated and not created)
         os.makedirs(input_dir, exist_ok=True)
         os.makedirs(output_dir, exist_ok=True)
-        os.makedirs(adhocs_dir, exist_ok=True)
         os.makedirs(artifacts_dir, exist_ok=True)
 
         # 1. Read Events & Metadata from session.jsonl
@@ -66,19 +66,23 @@ class SessionDocumenter:
         session_id = first_payload.get("session_id") or first_evt.get("session_id") or os.path.basename(session_dir)
         session_title = first_payload.get("session_title") or first_evt.get("session_title") or os.path.basename(session_dir)
         tab_group_name = first_payload.get("tab_group_name") or first_payload.get("group_name") or session_title.split(" | ")[0]
+        tab_group_id_val = first_payload.get("tab_group_id") or first_evt.get("tab_group_id") or 0
         group_color = first_payload.get("group_color", "purple")
         agent_name = first_payload.get("agent_name", "AgentSocket Local")
+        mode_val = first_payload.get("mode", "direct")
         start_time = first_evt.get("start_time") or time.time()
         start_dt_str = datetime.fromtimestamp(start_time).strftime("%Y-%m-%d %H:%M:%S")
+        created_at_iso = datetime.fromtimestamp(start_time).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-        status_str = "ACTIVE"
-        end_reason = "In Progress"
+        status_str = "active"
+        end_reason = "in_progress"
         total_duration_ms = 0.0
 
         for evt in reversed(events):
-            if evt.get("type") in ("session_end", "SessionEventType.SESSION_END"):
+            etype = str(evt.get("type", "")).lower()
+            if any(t in etype for t in ("session_end", "task_complete")):
                 p = evt.get("payload") or {}
-                status_str = str(p.get("status", "COMPLETED")).upper()
+                status_str = str(p.get("status", "completed")).lower()
                 end_reason = str(p.get("end_reason", "task_complete"))
                 total_duration_ms = p.get("total_duration_ms", 0.0)
                 break
@@ -87,12 +91,103 @@ class SessionDocumenter:
             last_time = events[-1].get("end_time") or events[-1].get("start_time") or start_time
             total_duration_ms = max(0.0, (last_time - start_time) * 1000.0)
 
+        # Calculate metrics
+        total_actions = 0
+        total_observes = 0
+        total_clicks = 0
+        total_types = 0
+        action_latencies: list[float] = []
+
+        for evt in events:
+            etype = str(evt.get("type", "")).lower()
+            dur = evt.get("duration_ms")
+            if dur is not None and dur > 0:
+                action_latencies.append(dur)
+
+            if any(k in etype for k in ("navigate", "execute_js", "task_complete", "click", "type", "act")):
+                total_actions += 1
+            if "observe" in etype:
+                total_observes += 1
+            if "click" in etype:
+                total_clicks += 1
+            if "type" in etype:
+                total_types += 1
+
+            p = evt.get("payload") or {}
+            action_prop = str(p.get("action", "")).lower()
+            if action_prop == "click":
+                total_clicks += 1
+            elif action_prop == "type":
+                total_types += 1
+
+        avg_settlement_ms = (
+            round(sum(action_latencies) / len(action_latencies), 1)
+            if action_latencies
+            else 0.0
+        )
+
+        deliverables: list[str] = []
+        if os.path.exists(output_dir) and os.listdir(output_dir):
+            for f_name in sorted(os.listdir(output_dir)):
+                deliverables.append(f"output/{f_name}")
+
+        permissions = first_payload.get("permissions") or {
+            "enable_subskills": True,
+            "enable_vision": False,
+        }
+
+        # Check existing frontmatter for borrowed subskills if present
+        borrowed_subskills = []
+        doc_file = paths.get("session_doc_path") or os.path.join(session_dir, "SESSION_DOCUMENT.md")
+        if os.path.exists(doc_file):
+            try:
+                with open(doc_file, "r", encoding="utf-8") as prev_df:
+                    prev_content = prev_df.read()
+                if prev_content.startswith("---"):
+                    parts = prev_content.split("---", 2)
+                    if len(parts) >= 3:
+                        prev_meta = yaml.safe_load(parts[1])
+                        if isinstance(prev_meta, dict):
+                            borrowed_subskills = prev_meta.get("borrowed_subskills", [])
+            except Exception:
+                pass
+
+        frontmatter_data: dict[str, Any] = {
+            "session_id": session_id,
+            "tab_group_id": tab_group_id_val,
+            "tab_group_name": tab_group_name,
+            "group_color": group_color,
+            "agent_name": agent_name,
+            "mode": mode_val,
+            "status": status_str,
+            "created_at": created_at_iso,
+            "duration_ms": round(total_duration_ms, 1),
+            "permissions": permissions,
+            "metrics": {
+                "total_actions": total_actions,
+                "total_observes": total_observes,
+                "total_clicks": total_clicks,
+                "total_types": total_types,
+                "avg_settlement_ms": avg_settlement_ms,
+            },
+            "deliverables": deliverables,
+        }
+        if borrowed_subskills:
+            frontmatter_data["borrowed_subskills"] = borrowed_subskills
+
+        frontmatter_yaml = yaml.dump(frontmatter_data, sort_keys=False, default_flow_style=False)
+
         dur_str = f"{total_duration_ms / 1000.0:.1f}s"
+        status_display = status_str.upper()
 
         lines = [
+            "---",
+            frontmatter_yaml.strip(),
+            "---",
+            "",
             f"# 📜 Session Document: `{tab_group_name}`",
             f"\n> **Session ID:** `{session_id}`  ",
-            f"> **Status:** `{status_str}` ({end_reason})  ",
+            f"> **Status:** `{status_display}` ({end_reason})  ",
             f"> **Start Time:** `{start_dt_str}`  ",
             f"> **Duration:** `{dur_str}`  ",
             f"> **Tab Group Accent:** `{group_color}` | **Agent:** `{agent_name}`  ",
@@ -165,26 +260,28 @@ class SessionDocumenter:
 
         # 5. Borrowed Subskills & Central Vault Tools (Spec 18)
         manifest_path = paths.get("manifest_path") or os.path.join(session_dir, "session_manifest.json")
-        if os.path.exists(manifest_path):
+        borrowed = borrowed_subskills
+        if not borrowed and os.path.exists(manifest_path):
             try:
                 with open(manifest_path, "r", encoding="utf-8") as mf:
                     m_data = json.load(mf)
                 borrowed = m_data.get("borrowed_subskills", [])
-                if borrowed:
-                    lines.append("## 🏛️ Borrowed Subskills & Referenced Vault Tools")
-                    lines.append("| Subskill | Borrowed At | Vault Path | Active Adhoc Tools |")
-                    lines.append("|:---|:---|:---|:---|")
-                    for b in borrowed:
-                        tools_str = ", ".join(f"`{t}`" for t in b.get("referenced_adhocs", []))
-                        lines.append(f"| `{b.get('name')}` | `{b.get('borrowed_at')}` | `{b.get('vault_path')}` | {tools_str or 'None'} |")
-                    lines.append("")
             except Exception:
                 pass
 
-        # 6. Adhoc Tools & Diagnostic Scripts
-        lines.append("## 🛠️ Adhoc Tools & Diagnostic Scripts (`adhocs/`)")
+        if borrowed:
+            lines.append("## 🏛️ Borrowed Subskills & Referenced Vault Tools")
+            lines.append("| Subskill | Borrowed At | Vault Path | Active Adhoc Tools |")
+            lines.append("|:---|:---|:---|:---|")
+            for b in borrowed:
+                tools_str = ", ".join(f"`{t}`" for t in b.get("referenced_adhocs", []))
+                lines.append(f"| `{b.get('name')}` | `{b.get('borrowed_at')}` | `{b.get('vault_path')}` | {tools_str or 'None'} |")
+            lines.append("")
+
+        # 6. Adhoc Tools & Diagnostic Scripts (Only shown if directory exists and has files)
         if os.path.exists(adhocs_dir) and os.listdir(adhocs_dir):
             adhoc_files = sorted(os.listdir(adhocs_dir))
+            lines.append("## 🛠️ Adhoc Tools & Diagnostic Scripts (`adhocs/`)")
             lines.append("| Script / Probe | Size | Purpose / Docstring |")
             lines.append("|:---|:---:|:---|")
             for f_name in adhoc_files:
@@ -202,10 +299,8 @@ class SessionDocumenter:
                         pass
                 lines.append(f"| [`{f_name}`](adhocs/{f_name}) | `{f_size}` | {doc_summary or 'Diagnostic / probe helper script'} |")
             lines.append("")
-        else:
-            lines.append("*No custom adhoc scripts saved in `adhocs/` folder.*\n")
 
-        # 6. Artifacts & Visual Snapshots
+        # 7. Artifacts & Visual Snapshots
         lines.append("## 🖼️ Artifacts & Visual Snapshots (`artifacts/`)")
         if os.path.exists(artifacts_dir) and os.listdir(artifacts_dir):
             art_files = sorted(os.listdir(artifacts_dir))
@@ -218,7 +313,7 @@ class SessionDocumenter:
         else:
             lines.append("*No heavy payload offloads or screenshots recorded in `artifacts/`.*\n")
 
-        # 7. Chronological Execution Timeline
+        # 8. Chronological Execution Timeline
         lines.append("## 🧵 Chronological Execution Timeline Thread")
         lines.append("Dedicated standalone thread log: [`THREAD.md`](THREAD.md)\n")
         formatted_thread = format_session_thread_fn(events, session_title=session_title, total_duration_ms=total_duration_ms)
@@ -235,9 +330,6 @@ class SessionDocumenter:
                 df.write(doc_content)
         except Exception as e:
             logger.warning(f"Warning writing session document: {e}")
-
-        # Also generate and write standalone THREAD.md
-        SessionDocumenter.generate_thread_document(paths=paths, format_session_thread_fn=format_session_thread_fn)
 
         return doc_content
 

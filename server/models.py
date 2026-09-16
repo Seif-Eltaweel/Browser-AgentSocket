@@ -9,7 +9,7 @@ from enum import Enum
 import time
 from typing import Any
 import uuid
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 # for actions 
 class ActionType(str, Enum):
@@ -211,6 +211,11 @@ class SessionEventType(str, Enum):
     SUBSKILL_REGISTERED = "subskill_registered"
     ERROR = "error"
     SESSION_END = "session_end"
+    OBSERVE = "observe"
+    CLICK = "click"
+    TYPE = "type"
+    ACT_ELEMENT = "act_element"
+    BROWSER_SCREENSHOT = "browser_screenshot"
 
 
 class SessionEventModel(BaseModel):
@@ -289,10 +294,21 @@ class BorrowedSubskillReference(BaseModel):
 
 
 class SessionManifestModel(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     session_id: str = Field(..., description="Unique session identifier")
     session_title: str = Field(..., description="Session title")
     tab_group_id: int | None = Field(default=None, description="Browser tab group ID")
+    tab_group_name: str | None = Field(default=None, description="Tab group name")
+    group_color: str | None = Field(default="purple", description="Tab group color")
+    agent_name: str | None = Field(default="AgentSocket Local", description="Agent name")
+    mode: str | None = Field(default="direct", description="Session execution mode")
+    status: str | None = Field(default="active", description="Session status")
     created_at: str = Field(default_factory=lambda: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+    duration_ms: float | None = Field(default=0.0, description="Execution duration in milliseconds")
+    permissions: dict[str, Any] | None = Field(default=None, description="Session permissions")
+    metrics: dict[str, Any] | None = Field(default=None, description="Session metrics")
+    deliverables: list[str] = Field(default_factory=list, description="Output deliverables list")
     borrowed_subskills: list[BorrowedSubskillReference] = Field(default_factory=list, description="Borrowed subskills references")
     universal_adhocs_referenced: list[str] = Field(default_factory=list, description="Universal adhocs used")
     local_overrides: list[str] = Field(default_factory=list, description="Local adhoc overrides in session/adhocs/")
