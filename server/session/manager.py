@@ -779,10 +779,13 @@ class SessionManager:
             artifact_link=artifact_link,
         )
 
-        # Atomic append to session.jsonl
+        # Atomic append to session.jsonl (Spec 25/28 Lean JSONL)
         try:
             with open(session.jsonl_path, "a", encoding="utf-8") as f:
-                f.write(event.model_dump_json() + "\n")
+                event_dict = event.model_dump(mode="json", exclude_none=True)
+                if event_type != SessionEventType.SESSION_START:
+                    event_dict.pop("session_id", None)
+                f.write(json.dumps(event_dict) + "\n")
                 f.flush()
                 try:
                     os.fsync(f.fileno())
