@@ -44,6 +44,39 @@ function loadActiveSessions() {
     });
 }
 
+// Spec 30: Persistent Session Authorization Storage
+function saveAuthorizedSessions() {
+    try {
+        const authList = Array.from(authorizedSessions);
+        const permList = Array.from(sessionPermissions.entries());
+        chrome.storage.local.set({ 
+            authorized_sessions_list: authList,
+            session_permissions_list: permList 
+        });
+        console.log(`[Hub] Persisted ${authorizedSessions.size} authorized sessions to storage (Spec 30).`);
+    } catch (e) {
+        console.warn("[Hub] Failed to persist authorizedSessions:", e);
+    }
+}
+
+function loadAuthorizedSessions() {
+    return new Promise((resolve) => {
+        chrome.storage.local.get(["authorized_sessions_list", "session_permissions_list"], (data) => {
+            if (data.authorized_sessions_list && Array.isArray(data.authorized_sessions_list)) {
+                data.authorized_sessions_list.forEach(item => authorizedSessions.add(item));
+            }
+            if (data.session_permissions_list && Array.isArray(data.session_permissions_list)) {
+                data.session_permissions_list.forEach(([k, v]) => sessionPermissions.set(k, v));
+            }
+            console.log(`[Hub] Hydrated ${authorizedSessions.size} authorized sessions from storage (Spec 30).`);
+            resolve();
+        });
+    });
+}
+
+// Hydrate authorizations on service worker wake
+loadAuthorizedSessions();
+
 // Active evaluations tracking: tabId -> Set of reject callbacks
 const activeEvaluations = new Map();
 
@@ -408,6 +441,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 authorizedSessions.delete(sessionTitle);
                 sessionPermissions.delete(sessionTitle);
             }
+            saveAuthorizedSessions();
 
             // Handshake Spec 22 Section 4.2: broadcast AUTH_RESPONSE to active gateway sockets
             const activeSess = activeSessions.get(sessionTitle);
@@ -545,6 +579,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 async function ensureAuthorized(sessionTitle, server) {
     const title = sessionTitle || "AgentSocket Task";
     if (authorizedSessions.has(title)) {
+        return true;
+    }
+
+    // Spec 30: Check persistent storage if in-memory set was cleared due to SW idle recycle
+    await loadAuthorizedSessions();
+    if (authorizedSessions.has(title)) {
+        return true;
+    }
+
+    // Auto-authorize if server explicitly configured with auto_authorize
+    if (server && server.auto_authorize) {
+        authorizedSessions.add(title);
+        sessionPermissions.set(title, { enable_subskills: true, enable_vision: true });
+        saveAuthorizedSessions();
         return true;
     }
 

@@ -312,15 +312,27 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="AgentSocket Server Gateway", lifespan=lifespan)
 
-# Ephemeral Token HTTP Authentication Middleware (Spec 22)
+# Ephemeral Token HTTP Authentication Middleware (Spec 22 & Spec 30)
 @app.middleware("http")
 async def verify_gateway_token(request: Request, call_next):
     # CORS preflight requests must bypass auth check
     if request.method == "OPTIONS":
         return await call_next(request)
 
+    client_host = request.client.host if request.client else ""
+    is_loopback = client_host in ["127.0.0.1", "localhost", "::1", "testclient"]
+
+    # Public loopback endpoints bypass
+    if request.url.path in ["/auth.html", "/api/token", "/health"] and is_loopback:
+        return await call_next(request)
+
+    origin = request.headers.get("origin") or ""
+    is_extension = origin.startswith("chrome-extension://")
+
     token = request.headers.get("x-agentsocket-token") or request.query_params.get("token")
-    if not state.server_token or token != state.server_token:
+    has_valid_token = bool(state.server_token and token == state.server_token)
+
+    if not (has_valid_token or (is_extension and is_loopback)):
         return JSONResponse(
             status_code=401,
             content={
@@ -376,6 +388,15 @@ def get_status(tab_group_id: int | None = None) -> dict[str, Any]:
         "tab_group_id": session.tab_group_id,
         "idle_seconds_remaining": max(0.0, IDLE_TIMEOUT_SECONDS - (time.time() - state.last_activity_time)),
     }
+
+
+@app.get("/api/token")
+def get_ephemeral_token(request: Request) -> dict[str, str]:
+    """Spec 30: Local token bootstrap endpoint for local browser extensions and tools."""
+    client_host = request.client.host if request.client else ""
+    if client_host not in ["127.0.0.1", "localhost", "::1", "testclient"]:
+        return JSONResponse(status_code=403, content={"error": "Forbidden: localhost only"})
+    return {"token": state.server_token or ""}
 
 
 @app.post("/progress")
@@ -559,7 +580,11 @@ def run_adhoc(payload: RunAdhocPayload) -> dict[str, Any]:
 @app.websocket("/ws/extension")
 async def extension_endpoint(websocket: WebSocket) -> None:
     token = websocket.headers.get("x-agentsocket-token") or websocket.query_params.get("token")
-    if not state.server_token or token != state.server_token:
+    origin = websocket.headers.get("origin") or ""
+    is_extension_origin = origin.startswith("chrome-extension://")
+    has_valid_token = bool(state.server_token and token == state.server_token)
+
+    if not (has_valid_token or is_extension_origin):
         logger.warning("Rejecting unauthenticated WebSocket connection attempt on /ws/extension.")
         await websocket.close(code=1008, reason="Unauthorized: invalid or missing gateway token")
         return
