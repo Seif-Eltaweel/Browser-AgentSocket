@@ -24,6 +24,10 @@ from server.session.manager import (
     OFFLOAD_ARRAY_THRESHOLD,
     REPO_ROOT,
 )
+from server.subskills import (
+    SubskillsManager,
+    subskills_manager,
+)
 
 __all__ = [
     "ActiveSession",
@@ -43,4 +47,6 @@ __all__ = [
     "OFFLOAD_STRING_THRESHOLD",
     "OFFLOAD_ARRAY_THRESHOLD",
     "REPO_ROOT",
+    "SubskillsManager",
+    "subskills_manager",
 ]

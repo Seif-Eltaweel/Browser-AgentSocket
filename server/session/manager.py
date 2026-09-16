@@ -49,6 +49,7 @@ from server.session.storage import (
     get_relative_session_path,
     sanitize_filename,
 )
+from server.subskills.manager import SubskillsManager
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TEMPLATES_ADHOCS_DIR = os.path.join(REPO_ROOT, "server", "templates", "adhocs")
@@ -492,6 +493,11 @@ class SessionManager:
         self.subskills_index_file = self.storage.subskills_index_file
         self.active_sessions: dict[int, ActiveSession] = {}
         self.title_to_group_id: dict[str, int] = {}
+        self.subskills = SubskillsManager(
+            subskills_dir=self.subskills_dir,
+            db_path=self.storage.db_path,
+            index_file=self.subskills_index_file,
+        )
 
     def _ensure_directories(self) -> None:
         self.storage.ensure_directories()
@@ -509,10 +515,10 @@ class SessionManager:
         self.storage.write_index(index_model)
 
     def _read_subskills_index(self) -> SubskillsIndexModel:
-        return self.storage.read_subskills_index()
+        return self.subskills._read_subskills_index()
 
     def _write_subskills_index(self, index_model: SubskillsIndexModel) -> None:
-        self.storage.write_subskills_index(index_model)
+        self.subskills._write_subskills_index(index_model)
 
     def _update_index_for_session(self, session: ActiveSession) -> None:
         self.storage.update_index_for_session(session)
@@ -963,64 +969,12 @@ class SessionManager:
         query: str = "",
         tags: list[str] | None = None,
     ) -> list[dict[str, Any]]:
-        """Lists registered subskills from subskills_index.json matching search query or tags."""
-        index_model = self._read_subskills_index()
-        query_lower = query.lower().strip()
-        results: list[SubskillModel] = []
-
-        for subskill in index_model.subskills.values():
-            if query_lower:
-                searchable = f"{subskill.name} {subskill.display_title} {subskill.description} {' '.join(subskill.tags)}".lower()
-                if query_lower not in searchable:
-                    continue
-
-            if tags:
-                sub_tags_lower = [t.lower() for t in subskill.tags]
-                req_tags_lower = [t.lower() for t in tags]
-                if not any(t in sub_tags_lower for t in req_tags_lower):
-                    continue
-
-            results.append(subskill)
-
-        results.sort(key=lambda s: (s.times_borrowed, s.name), reverse=True)
-        return [s.model_dump() for s in results]
+        """Lists registered subskills using SubskillsManager (SQLite indexed search with JSON fallback)."""
+        return self.subskills.list_subskills(query=query, tags=tags)
 
     def get_subskill(self, name: str) -> dict[str, Any] | None:
         """Retrieves a subskill by slug name, including metadata, playbook markdown, and adhoc tools."""
-        index_model = self._read_subskills_index()
-        subskill = index_model.subskills.get(name)
-        if not subskill:
-            return None
-
-        vault_dir = None
-        if subskill.vault_path:
-            clean_vault = subskill.vault_path.replace("/", os.sep).replace("\\", os.sep)
-            vault_dir = clean_vault if os.path.isabs(clean_vault) else os.path.join(REPO_ROOT, clean_vault)
-        elif subskill.latest_session_path:
-            sess_dir = subskill.latest_session_path.replace("/", os.sep).replace("\\", os.sep)
-            vault_dir = sess_dir if os.path.isabs(sess_dir) else os.path.join(REPO_ROOT, sess_dir)
-        else:
-            vault_dir = os.path.join(self.subskills_dir, name)
-
-        sub_file = os.path.join(vault_dir, subskill.subskill_file)
-
-        playbook_markdown = ""
-        if os.path.exists(sub_file):
-            try:
-                with open(sub_file, "r", encoding="utf-8") as sf:
-                    playbook_markdown = sf.read()
-            except Exception as e:
-                playbook_markdown = f"*Failed to read playbook: {e}*"
-
-        adhocs_dir = os.path.join(vault_dir, "adhocs")
-        adhoc_files = []
-        if os.path.exists(adhocs_dir):
-            adhoc_files = [f for f in os.listdir(adhocs_dir) if os.path.isfile(os.path.join(adhocs_dir, f))]
-
-        res = subskill.model_dump()
-        res["playbook_markdown"] = playbook_markdown
-        res["available_adhoc_tools"] = adhoc_files or subskill.adhoc_tools
-        return res
+        return self.subskills.get_subskill(name=name)
 
     def register_subskill(
         self,
@@ -1032,157 +986,44 @@ class SessionManager:
         adhoc_tools: list[str] | None = None,
         subskill_markdown: str | None = None,
     ) -> dict[str, Any]:
-        """Registers or updates a session as a permanent reusable subskill in the central vault."""
+        """Registers or updates a session as a permanent reusable subskill in the central vault and SQLite catalog."""
         paths = self.get_session_paths(session_path)
         session_dir = paths["session_dir"]
         rel_session_path = paths["session_path"]
-        sub_skill_file = paths["sub_skill_path"]
-        adhocs_dir = paths["adhocs_dir"]
 
-        os.makedirs(session_dir, exist_ok=True)
-        os.makedirs(adhocs_dir, exist_ok=True)
-
-        if subskill_markdown:
-            with open(sub_skill_file, "w", encoding="utf-8") as sf:
-                sf.write(subskill_markdown)
-        elif not os.path.exists(sub_skill_file):
-            scaffold = f"""---
-name: {name}
-description: "{description or f'Automated subskill playbook for {name}'}"
-version: "1.0"
-platform: "web"
-rate_limit_pause_range: [3.0, 6.0]
----
-
-# {display_title or name.replace('-', ' ').title()} Playbook
-
-## 1. Tested Navigation Routes
-* Target URL: `https://example.com/`
-
-## 2. Verified DOM Selectors & Extraction Rules
-* Main content: `main`
-* Data extraction rules here.
-
-## 3. Data Schema & Contracts
-| Column | Type | Description |
-|---|---|---|
-| `id` | String | Unique identifier |
-"""
-            with open(sub_skill_file, "w", encoding="utf-8") as sf:
-                sf.write(scaffold)
-
-        if not display_title or not description or not tags:
-            try:
-                with open(sub_skill_file, "r", encoding="utf-8") as sf:
-                    txt = sf.read()
-                if txt.startswith("---"):
-                    parts = txt.split("---", 2)
-                    if len(parts) >= 3:
-                        fm = parts[1]
-                        for line in fm.splitlines():
-                            line = line.strip()
-                            if line.startswith("name:") and not name:
-                                name = line.split("name:", 1)[1].strip().strip('"\'')
-                            elif line.startswith("description:") and not description:
-                                description = line.split("description:", 1)[1].strip().strip('"\'')
-            except Exception:
-                pass
-
-        name = sanitize_filename(name).lower().replace("_", "-")
-        display_title = display_title or name.replace("-", " ").title()
-        description = description or f"Automated subskill recipe for {display_title}."
-        if tags is None:
-            tags = [t.strip().lower() for t in re.split(r"[-_\s]+", name) if t.strip()]
-
-        found_tools = []
-        if os.path.exists(adhocs_dir):
-            found_tools = [f for f in os.listdir(adhocs_dir) if os.path.isfile(os.path.join(adhocs_dir, f))]
-        tools_list = adhoc_tools if adhoc_tools is not None else found_tools
-
-        session_id = f"sess_{name}_{int(time.time())}"
-        if os.path.exists(paths["jsonl_path"]):
-            try:
-                with open(paths["jsonl_path"], "r", encoding="utf-8") as f:
-                    first_l = f.readline().strip()
-                    if first_l:
-                        data = json.loads(first_l)
-                        session_id = data.get("session_id") or data.get("payload", {}).get("session_id") or session_id
-            except Exception:
-                pass
-
-        # Vault Promotion: Promote into permanent central subskills vault (server/subskills/<name>)
-        vault_subskill_dir = os.path.join(self.subskills_dir, name)
-        vault_adhocs_dir = os.path.join(vault_subskill_dir, "adhocs")
-        os.makedirs(vault_subskill_dir, exist_ok=True)
-        os.makedirs(vault_adhocs_dir, exist_ok=True)
-
-        # Copy sub_skill.md to vault
-        dst_playbook = os.path.join(vault_subskill_dir, "sub_skill.md")
-        if os.path.exists(sub_skill_file):
-            shutil.copy2(sub_skill_file, dst_playbook)
-
-        # Copy specified or found tools to vault adhocs/
-        promoted_tools: list[str] = []
-        for t_name in tools_list:
-            src_tool = os.path.join(adhocs_dir, t_name)
-            if os.path.isfile(src_tool):
-                dst_tool = os.path.join(vault_adhocs_dir, t_name)
-                shutil.copy2(src_tool, dst_tool)
-                promoted_tools.append(t_name)
-
-        vault_rel_path = get_relative_session_path(vault_subskill_dir)
-
-        index_model = self._read_subskills_index()
-        now_iso = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
-        existing = index_model.subskills.get(name)
-        created_at = existing.created_at if existing else now_iso
-        times_borrowed = existing.times_borrowed if existing else 0
-
-        subskill = SubskillModel(
+        res = self.subskills.register_subskill(
+            session_path=session_path,
             name=name,
             display_title=display_title,
             description=description,
             tags=tags,
-            vault_path=vault_rel_path,
-            subskill_file="sub_skill.md",
-            adhoc_tools=promoted_tools or tools_list,
-            times_borrowed=times_borrowed,
-            success_rate=1.0,
-            origin_session_id=session_id,
-            latest_session_id=session_id,
-            latest_session_path=rel_session_path,
-            created_at=created_at,
-            updated_at=now_iso,
+            adhoc_tools=adhoc_tools,
+            subskill_markdown=subskill_markdown,
         )
 
-        index_model.subskills[name] = subskill
-        self._write_subskills_index(index_model)
+        subskill_data = res.get("subskill", {})
+        sub_name = subskill_data.get("name") or name
 
         for gid, sess in self.active_sessions.items():
             if sess.session_path == rel_session_path or sess.session_dir == session_dir:
                 self.log_event(
                     tab_group_id=gid,
                     event_type=SessionEventType.SUBSKILL_REGISTERED,
-                    title=f"Registered Subskill: {name}",
+                    title=f"Registered Subskill: {sub_name}",
                     start_time=time.time(),
                     payload={
-                        "subskill_name": name,
-                        "display_title": display_title,
-                        "tags": tags,
-                        "vault_path": vault_rel_path,
-                        "adhoc_tools": subskill.adhoc_tools,
+                        "subskill_name": sub_name,
+                        "display_title": subskill_data.get("display_title"),
+                        "tags": subskill_data.get("tags"),
+                        "vault_path": res.get("vault_path"),
+                        "playbook_path": res.get("playbook_path"),
+                        "adhoc_tools": subskill_data.get("adhoc_tools", []),
                     },
                 )
                 break
 
         self.generate_session_document(session_dir)
-
-        return {
-            "status": "success",
-            "message": f"Subskill '{name}' registered into central vault successfully.",
-            "subskill": subskill.model_dump(),
-            "vault_path": vault_rel_path,
-        }
+        return res
 
     def borrow_subskill(
         self,
@@ -1199,24 +1040,28 @@ rate_limit_pause_range: [3.0, 6.0]
         4. Copies input data file into input/ if provided.
         5. Increments times_borrowed and emits subskill_borrowed event.
         """
-        index_model = self._read_subskills_index()
-        subskill = index_model.subskills.get(name)
-        if not subskill:
+        subskill_dict = self.subskills.get_subskill(name)
+        if not subskill_dict:
             return {
                 "status": "error",
                 "message": f"Subskill '{name}' was not found in central registry.",
             }
+        subskill = SubskillModel.model_validate(subskill_dict)
+        index_model = self._read_subskills_index()
 
         # Determine source vault directory
         vault_dir = None
-        if subskill.vault_path:
+        candidate_subskill_dir = os.path.join(self.subskills_dir, name)
+        if os.path.isdir(candidate_subskill_dir):
+            vault_dir = candidate_subskill_dir
+        elif subskill.vault_path:
             clean_vault = subskill.vault_path.replace("/", os.sep).replace("\\", os.sep)
             vault_dir = clean_vault if os.path.isabs(clean_vault) else os.path.join(REPO_ROOT, clean_vault)
         elif subskill.latest_session_path:
             sess_dir = subskill.latest_session_path.replace("/", os.sep).replace("\\", os.sep)
             vault_dir = sess_dir if os.path.isabs(sess_dir) else os.path.join(REPO_ROOT, sess_dir)
         else:
-            vault_dir = os.path.join(self.subskills_dir, name)
+            vault_dir = candidate_subskill_dir
 
         target_session: ActiveSession | None = None
         target_dir: str = ""
@@ -1306,9 +1151,12 @@ rate_limit_pause_range: [3.0, 6.0]
                 except Exception as e:
                     logger.warning(f"Warning copying input file {full_inp}: {e}")
 
-        # 4. Increment times_borrowed & update index
+        # 4. Increment times_borrowed & times_referenced in SQLite and index
+        self.subskills.increment_reference_sqlite(name)
         subskill.times_borrowed += 1
+        subskill.times_referenced += 1
         subskill.updated_at = now_iso
+        index_model.subskills[name] = subskill
         self._write_subskills_index(index_model)
 
         # 5. Log subskill_borrowed event

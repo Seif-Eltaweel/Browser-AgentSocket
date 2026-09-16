@@ -75,6 +75,7 @@ server/logs/
 # Permanent Central Vaults (Spec 18 - Committed & Shared)
 !server/subskills/
 !server/subskills/**
+server/subskills/**/__pycache__/
 !server/adhocs/
 !server/adhocs/**
 

@@ -15,7 +15,9 @@ from server.models import (
     RegisterSubskillPayload,
     SessionEventType,
 )
+from server.db import get_connection
 from server.session_manager import SessionManager
+from server.subskills.manager import SubskillsManager, parse_sop_playbook
 from server.socket_server import app, state
 
 
@@ -232,6 +234,183 @@ Test instructions.
         doc_json = resp.json()
         self.assertEqual(doc_json["status"], "success")
         self.assertIn("Session Document", doc_json["document_markdown"])
+
+    def test_spec26_sqlite_subskills_table_sync(self):
+        """Spec 26: Verify subskills are upserted into SQLite subskills table and JSON export."""
+        sess = self.manager.get_or_create_session(tab_group_id=701, tab_group_name="Spec 26 Sync Run")
+        playbook_text = """---
+name: spec26-lead-sop
+display_title: "Spec 26 Lead SOP"
+description: "SOP playbook for lead qualification without executable scripts."
+tags: ["leads", "qualification", "b2b"]
+version: "2.1.0"
+---
+# Playbook: Spec 26 Lead SOP
+
+## Strategic Objective
+Qualify leads using browser observation and atomic actions.
+
+## Recommended OODA Steps
+1. Call `browser_observe` to inspect profile card.
+2. Determine lead relevance score.
+3. If CAPTCHA is detected, wait for human takeover.
+"""
+        with open(os.path.join(sess.session_dir, "sub_skill.md"), "w", encoding="utf-8") as f:
+            f.write(playbook_text)
+
+        reg_res = self.manager.register_subskill(
+            session_path=sess.session_dir,
+            name="spec26-lead-sop",
+            display_title="Spec 26 Lead SOP",
+            description="SOP playbook for lead qualification without executable scripts.",
+            tags=["leads", "qualification", "b2b"],
+        )
+        self.assertEqual(reg_res["status"], "success")
+
+        # 1. Verify directly in SQLite subskills table
+        with get_connection(self.manager.storage.db_path) as conn:
+            cur = conn.execute(
+                "SELECT slug, display_title, description, tags, times_referenced, playbook_path FROM subskills WHERE slug = ?",
+                ("spec26-lead-sop",),
+            )
+            row = cur.fetchone()
+            self.assertIsNotNone(row)
+            self.assertEqual(row["slug"], "spec26-lead-sop")
+            self.assertEqual(row["display_title"], "Spec 26 Lead SOP")
+            self.assertIn("qualification", row["tags"])
+            self.assertTrue(row["playbook_path"].endswith("sub_skill.md"))
+
+        # 2. Verify portable JSON export
+        index_model = self.manager._read_subskills_index()
+        self.assertEqual(index_model.version, "2.1.0")
+        self.assertIn("spec26-lead-sop", index_model.subskills)
+        exported = index_model.subskills["spec26-lead-sop"]
+        self.assertEqual(exported.display_title, "Spec 26 Lead SOP")
+        self.assertTrue(exported.playbook_path.endswith("sub_skill.md"))
+
+    def test_spec26_sop_markdown_playbook_structure(self):
+        """Spec 26: Verify example-sop structure and zero executable scripts."""
+        example_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "server", "subskills", "example-sop")
+        playbook_file = os.path.join(example_dir, "sub_skill.md")
+        self.assertTrue(os.path.isfile(playbook_file), "example-sop/sub_skill.md must exist.")
+
+        with open(playbook_file, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        # Zero executable scripts: verify no python files in example-sop/
+        files_in_folder = os.listdir(example_dir)
+        py_files = [f for f in files_in_folder if f.endswith(".py")]
+        self.assertEqual(len(py_files), 0, "SOP subskills must contain zero executable scripts.")
+
+        # Verify frontmatter
+        fm, body = parse_sop_playbook(content)
+        self.assertEqual(fm.get("name"), "example-sop")
+        self.assertEqual(fm.get("version"), "2.1.0")
+
+        # Verify OODA structure
+        self.assertIn("Strategic Objective", body)
+        self.assertIn("Recommended OODA Steps", body)
+        self.assertIn("Awaiting Human 2FA", body)
+
+    def test_spec26_sqlite_query_with_json_fallback(self):
+        """Spec 26: Verify fast SQLite queries with automatic fallback to subskills_index.json."""
+        # Query via manager (hits SQLite)
+        results = self.manager.list_subskills()
+        self.assertIsInstance(results, list)
+
+        # Retrieve a subskill via get_subskill
+        sess = self.manager.get_or_create_session(tab_group_id=801, tab_group_name="Fallback Test")
+        with open(os.path.join(sess.session_dir, "sub_skill.md"), "w", encoding="utf-8") as f:
+            f.write("# Fallback Playbook\nOODA Step 1: Observe")
+
+        self.manager.register_subskill(
+            session_path=sess.session_dir,
+            name="fallback-skill",
+            display_title="Fallback Test Skill",
+            tags=["fallback", "test"],
+        )
+
+        # 1. Normal SQLite retrieval
+        sk = self.manager.get_subskill("fallback-skill")
+        self.assertIsNotNone(sk)
+        self.assertEqual(sk["name"], "fallback-skill")
+        self.assertIn("Fallback Playbook", sk["playbook_markdown"])
+
+        # 2. Test fallback when SQLite list fails
+        orig_list_sqlite = self.manager.subskills.list_subskills_sqlite
+        self.manager.subskills.list_subskills_sqlite = lambda query="", tags=None: None
+        try:
+            fallback_results = self.manager.list_subskills(query="Fallback")
+            self.assertEqual(len(fallback_results), 1)
+            self.assertEqual(fallback_results[0]["name"], "fallback-skill")
+        finally:
+            self.manager.subskills.list_subskills_sqlite = orig_list_sqlite
+
+        # 3. Test fallback when SQLite get fails
+        orig_get_sqlite = self.manager.subskills.get_subskill_sqlite
+        self.manager.subskills.get_subskill_sqlite = lambda name: None
+        try:
+            fallback_sk = self.manager.get_subskill("fallback-skill")
+            self.assertIsNotNone(fallback_sk)
+            self.assertEqual(fallback_sk["name"], "fallback-skill")
+            self.assertIn("Fallback Playbook", fallback_sk["playbook_markdown"])
+        finally:
+            self.manager.subskills.get_subskill_sqlite = orig_get_sqlite
+
+    def test_spec26_times_referenced_increment(self):
+        """Spec 26: Verify times_referenced is incremented in SQLite and index on borrow."""
+        sess = self.manager.get_or_create_session(tab_group_id=901, tab_group_name="Counter Run")
+        with open(os.path.join(sess.session_dir, "sub_skill.md"), "w", encoding="utf-8") as f:
+            f.write("# Counter Playbook")
+
+        self.manager.register_subskill(
+            session_path=sess.session_dir,
+            name="counter-skill",
+            display_title="Counter Test Skill",
+        )
+
+        # Initial times_referenced should be 0
+        details = self.manager.get_subskill("counter-skill")
+        self.assertEqual(details["times_referenced"], 0)
+
+        # Borrow once
+        self.manager.borrow_subskill(
+            name="counter-skill",
+            target_session_id_or_title_or_path="Target Session A",
+            tab_group_id=902,
+        )
+
+        # Check in SQLite directly
+        with get_connection(self.manager.storage.db_path) as conn:
+            cur = conn.execute("SELECT times_referenced FROM subskills WHERE slug = ?", ("counter-skill",))
+            row = cur.fetchone()
+            self.assertEqual(row["times_referenced"], 1)
+
+        # Check in index JSON
+        index_model = self.manager._read_subskills_index()
+        self.assertEqual(index_model.subskills["counter-skill"].times_referenced, 1)
+
+        # Borrow second time
+        self.manager.borrow_subskill(
+            name="counter-skill",
+            target_session_id_or_title_or_path="Target Session B",
+            tab_group_id=903,
+        )
+
+        with get_connection(self.manager.storage.db_path) as conn:
+            cur = conn.execute("SELECT times_referenced FROM subskills WHERE slug = ?", ("counter-skill",))
+            row = cur.fetchone()
+            self.assertEqual(row["times_referenced"], 2)
+
+    def test_spec26_fastapi_example_sop_endpoint(self):
+        """Spec 26: Verify FastAPI GET /subskills/example-sop returns markdown OODA playbook."""
+        resp = self.client.get("/subskills/example-sop")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["status"], "success")
+        self.assertEqual(data["data"]["name"], "example-sop")
+        self.assertIn("Recommended OODA Steps", data["data"]["playbook_markdown"])
+        self.assertIn("Awaiting Human 2FA", data["data"]["playbook_markdown"])
 
 
 if __name__ == "__main__":

@@ -96,7 +96,7 @@ class SessionStorage:
     def _migrate_or_init_subskills_index(self) -> None:
         """Migrates legacy logs/subskills_index.json if present, or initializes a clean version 2.0 index."""
         legacy_index_file = os.path.join(self.base_log_dir, "subskills_index.json")
-        migrated_index = SubskillsIndexModel(version="2.0")
+        migrated_index = SubskillsIndexModel(version="2.1.0")
 
         if os.path.exists(legacy_index_file):
             try:
@@ -361,8 +361,8 @@ class SessionStorage:
                         sk.display_title,
                         sk.description,
                         tags_str,
-                        sk.times_borrowed,
-                        sk.vault_path or f"server/subskills/{slug}",
+                        sk.times_referenced or sk.times_borrowed,
+                        sk.playbook_path or (f"{sk.vault_path}/sub_skill.md" if sk.vault_path else f"server/subskills/{slug}/sub_skill.md"),
                     ))
         except Exception as e:
             logger.warning(f"Error syncing subskills to SQLite: {e}")

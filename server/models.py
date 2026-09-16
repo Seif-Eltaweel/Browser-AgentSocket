@@ -6,10 +6,11 @@ Typed Pydantic models and Enums for Python FastAPI gateway, MCP server, and laun
 
 from __future__ import annotations # For using types inside the class itself
 from enum import Enum 
+import os
 import time
 from typing import Any
 import uuid
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 
 # for actions 
 class ActionType(str, Enum):
@@ -270,8 +271,10 @@ class SubskillModel(BaseModel):
     tags: list[str] = Field(default_factory=list, description="Searchable semantic tags")
     vault_path: str = Field(default="", description="Relative path to subskill in permanent central vault")
     subskill_file: str = Field(default="sub_skill.md", description="Relative filename of the playbook")
+    playbook_path: str = Field(default="", description="Relative path to sub_skill.md playbook (Spec 26)")
     adhoc_tools: list[str] = Field(default_factory=list, description="List of filenames inside adhocs/ folder")
     times_borrowed: int = Field(default=0, description="Counter of times this subskill has been borrowed")
+    times_referenced: int = Field(default=0, description="Counter of times this subskill has been referenced/borrowed (Spec 26)")
     success_rate: float = Field(default=1.0, description="Reported task success rate (0.0 to 1.0)")
     origin_session_id: str | None = Field(default=None, description="Session ID of the source or latest updated session")
     latest_session_id: str | None = Field(default=None, description="Legacy session ID of source session")
@@ -279,9 +282,39 @@ class SubskillModel(BaseModel):
     created_at: str = Field(default_factory=lambda: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
     updated_at: str = Field(default_factory=lambda: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
 
+    @model_validator(mode="before")
+    @classmethod
+    def _sync_subskill_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "times_referenced" in data and "times_borrowed" not in data:
+                data["times_borrowed"] = data["times_referenced"]
+            elif "times_borrowed" in data and "times_referenced" not in data:
+                data["times_referenced"] = data["times_borrowed"]
+            elif "times_referenced" in data and "times_borrowed" in data:
+                max_ref = max(data.get("times_referenced") or 0, data.get("times_borrowed") or 0)
+                data["times_referenced"] = max_ref
+                data["times_borrowed"] = max_ref
+
+            name = data.get("name") or data.get("slug", "")
+            if not data.get("name") and name:
+                data["name"] = name
+
+            playbook_path = data.get("playbook_path", "")
+            vault_path = data.get("vault_path", "")
+            subskill_file = data.get("subskill_file", "sub_skill.md")
+
+            if not playbook_path and vault_path:
+                data["playbook_path"] = f"{vault_path}/{subskill_file}".replace("\\", "/")
+            elif not vault_path and playbook_path:
+                data["vault_path"] = os.path.dirname(playbook_path).replace("\\", "/")
+            elif not playbook_path and not vault_path and name:
+                data["vault_path"] = f"server/subskills/{name}"
+                data["playbook_path"] = f"server/subskills/{name}/{subskill_file}"
+        return data
+
 
 class SubskillsIndexModel(BaseModel):
-    version: str = "2.0"
+    version: str = "2.1.0"
     updated_at: Any = Field(default_factory=lambda: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
     subskills: dict[str, SubskillModel] = Field(default_factory=dict)
 
