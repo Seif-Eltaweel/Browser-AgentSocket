@@ -24,8 +24,6 @@ AgentSocket-Browser is a secure, human-in-the-loop browser automation bridge tha
 | 📖 [**Subskills Playbook Guide (`docs/subskills_playbook_guide.md`)**](docs/subskills_playbook_guide.md) | Authoring high-accuracy `sub_skill.md` playbooks, selector contracts & schemas. |
 | 🌐 [**Extended Multi-OS & Docker Guide (`docs/installation.md`)**](docs/installation.md) | Deep guide covering Brave, Edge, Docker headless runtimes & enterprise VPNs. |
 | 📚 [**Master Codebase Spec (`docs/codebase_master_specification.md`)**](docs/codebase_master_specification.md) | Complete engineering reference covering Specifications 00 through 14. |
-| 🔒 [**Spec 30: Persistent Session Authorization (`docs/spec_30_persistent_session_authorization.md`)**](docs/spec_30_persistent_session_authorization.md) | Persistent MV3 storage hydration, eliminating auth redundancy while preserving human consent. |
-| 🕹️ [**Spec 31: Pure Model-Driven OODA Browser Operation (`docs/spec_31_model_driven_ooda_browser_operation.md`)**](docs/spec_31_model_driven_ooda_browser_operation.md) | Manus AI standard: model-driven OODA loop, deprecating ad-hoc scrapers, 19-column schema. |
 
 ---
 

@@ -461,7 +461,7 @@ WS   /ws/extension       -> Bidirectional WebSocket connection with Chrome exten
 ---
 
 ## 5.4 Progress HUD & Atomic Step Tracking Engine
-* **Specification Document:** [`docs/progress_hud_and_step_tracking_specification.md`](file:///c:/Users/20106/agent_bro_hands/docs/progress_hud_and_step_tracking_specification.md)
+* **Specification Document:** [`specs/17_session_hud_progress_group_lifecycle_and_glow_cleanup_spec.md`](file:///c:/Users/20106/agent_bro_hands/specs/17_session_hud_progress_group_lifecycle_and_glow_cleanup_spec.md)
 * **Purpose:** Real-time situational awareness for human operators and deterministic task progress tracking for AI agents.
 * **On-Disk Source:** `input/implementation_plan.md` (Checklist schema `- [ ] **Step N**`).
 * **Formula:** $\text{Progress \%} = (\text{Completed Steps} / \text{Total Steps}) \times 100$.
