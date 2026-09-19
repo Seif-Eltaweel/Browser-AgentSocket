@@ -1,6 +1,6 @@
 {
   "version": "2.1.0",
-  "updated_at": "2026-09-16T05:00:00Z",
+  "updated_at": "2026-09-19T04:39:32Z",
   "subskills": {
     "linkedin-crm-enricher": {
       "name": "linkedin-crm-enricher",
@@ -18,11 +18,7 @@
       "vault_path": "server/subskills/linkedin-crm-enricher",
       "subskill_file": "sub_skill.md",
       "playbook_path": "server/subskills/linkedin-crm-enricher/sub_skill.md",
-      "adhoc_tools": [
-        "probe_dom.py",
-        "enricher_engine.py",
-        "experience_parser.py"
-      ],
+      "adhoc_tools": [],
       "times_borrowed": 5,
       "times_referenced": 5,
       "success_rate": 1.0,
@@ -46,9 +42,12 @@
       "subskill_file": "sub_skill.md",
       "playbook_path": "server/subskills/example-sop/sub_skill.md",
       "adhoc_tools": [],
-      "times_borrowed": 0,
-      "times_referenced": 0,
+      "times_borrowed": 15,
+      "times_referenced": 15,
       "success_rate": 1.0,
+      "origin_session_id": null,
+      "latest_session_id": null,
+      "latest_session_path": null,
       "created_at": "2026-09-16T05:00:00Z",
       "updated_at": "2026-09-16T05:00:00Z"
     }

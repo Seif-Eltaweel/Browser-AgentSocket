@@ -13,6 +13,17 @@ AgentSocket is a high-speed, plug-and-play browser automation gateway and Model 
 
 ---
 
+> [!CAUTION]
+> ### 🚫 STRICT PROHIBITION: NO GENERATED BROWSER AUTOMATION SCRIPTS (Spec 33)
+> - **NEVER write, save, or run standalone automation/scraping scripts** (e.g. `enricher_engine.py`, `batch_runner.py`, or scripts executing raw JavaScript loops via `execute_js`) to fulfill browser tasks.
+> - **The AI Model IS the Automation Engine**: You must directly drive each browser interaction turn-by-turn through atomic OODA tools (`browser_observe`, `browser_click`, `browser_type`, `browser_scroll`, `browser_key_press`).
+> - **Batch Workflows**: When processing multi-row datasets (e.g. CSV batches), iterate row-by-row inside the agentic conversation loop:
+>   * Evaluate fast-track / bypass criteria in memory.
+>   * For eligible targets, navigate and execute `browser_observe()` ➔ `Orient` ➔ `Decide` ➔ `Act`.
+>   * Update the live checkpoint file and HUD action ticker after each record.
+
+---
+
 ## 🔄 Model-Driven Operational Paradigm: The OODA Execution Loop
 
 External AI agents operating AgentSocket MUST drive browser workflows through continuous, adaptive **Observe-Orient-Decide-Act (OODA)** cycles rather than rigid, pre-scripted automation procedures.
@@ -168,9 +179,9 @@ Add AgentSocket to your client's MCP configuration (`claude_desktop_config.json`
 * `socket_borrow_subskill`: Clones a subskill playbook into active session workspace (`input/sub_skill.md`).
 * `socket_register_subskill`: Packages a completed session as a reusable SOP playbook in the central registry.
 
-### 4. Legacy Script Tools (Deprecated)
-* `socket_execute`: Legacy single-shot action dispatcher (`navigate` / `execute_js`). Prefer direct atomic tools.
-* `socket_run_adhoc`, `socket_promote_adhoc`, `socket_list_adhocs`: Deprecated in favor of atomic OODA tools and Markdown SOPs.
+### 4. Retired Architecture (Spec 33)
+* Adhoc Script Execution: Permanently removed from the MCP tool registry. Standalone scraper scripts are forbidden; all browser automation MUST be driven turn-by-turn using atomic OODA tools.
+* `socket_execute`: Legacy single-shot action dispatcher. Prefer direct atomic tools (`browser_click`, `browser_type`, etc.) for page interactions.
 
 ---
 

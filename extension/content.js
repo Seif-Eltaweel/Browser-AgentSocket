@@ -25,6 +25,11 @@ let currentActionSubtext = "Initializing OODA observer...";
 let currentPhaseBadge = "";
 let isHudMinimized = false;
 
+// Spec 32: Strategic Milestones & HUD Progress State
+let currentMilestones = [];
+let activeMilestoneIndex = 1;
+let currentMilestoneTitle = "";
+
 let currentProgress = {
     percent: 0,
     currentStep: 0,
@@ -62,12 +67,27 @@ function loadStoredProgress() {
                 }
             }
         }
+        const storedMilestones = sessionStorage.getItem("agentsocket_hud_milestones");
+        if (storedMilestones) {
+            const parsedM = JSON.parse(storedMilestones);
+            if (Array.isArray(parsedM)) {
+                currentMilestones = parsedM;
+            }
+        }
+        const storedIdx = sessionStorage.getItem("agentsocket_hud_active_milestone");
+        if (storedIdx) {
+            activeMilestoneIndex = parseInt(storedIdx, 10) || activeMilestoneIndex;
+        }
     } catch (e) {}
 }
 
 function saveStoredProgress(progress) {
     try {
         sessionStorage.setItem("agentsocket_hud_progress", JSON.stringify(progress));
+        if (currentMilestones && currentMilestones.length > 0) {
+            sessionStorage.setItem("agentsocket_hud_milestones", JSON.stringify(currentMilestones));
+        }
+        sessionStorage.setItem("agentsocket_hud_active_milestone", String(activeMilestoneIndex));
     } catch (e) {}
 }
 
@@ -106,6 +126,15 @@ function checkInitialSessionState() {
                 currentSessionTitle = response.session_title || currentSessionTitle;
                 currentGroupColor = response.group_color || currentGroupColor;
                 isTakeoverActive = !!response.human_in_control;
+                if (response.milestones && Array.isArray(response.milestones)) {
+                    currentMilestones = response.milestones;
+                }
+                if (response.active_milestone_index !== undefined) {
+                    activeMilestoneIndex = response.active_milestone_index;
+                }
+                if (response.current_action) {
+                    currentActionSubtext = response.current_action;
+                }
                 if (response.progress_percent !== undefined || response.step_total !== undefined) {
                     currentProgress.currentStep = response.step_current ?? currentProgress.currentStep;
                     currentProgress.totalSteps = response.step_total ?? currentProgress.totalSteps;
@@ -139,6 +168,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         case "show_glow":
             currentSessionTitle = message.session_title || "AgentSocket Task";
             currentGroupColor = message.group_color || "purple";
+            if (message.milestones && Array.isArray(message.milestones)) {
+                currentMilestones = message.milestones;
+            }
+            if (message.active_milestone_index !== undefined) {
+                activeMilestoneIndex = message.active_milestone_index;
+            }
+            if (message.current_action) {
+                currentActionSubtext = message.current_action;
+            }
             if (message.progress_percent !== undefined || message.step_total !== undefined) {
                 currentProgress.currentStep = message.step_current ?? currentProgress.currentStep;
                 currentProgress.totalSteps = message.step_total ?? currentProgress.totalSteps;
@@ -220,10 +258,62 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             sendResponse({ status: "success" });
             break;
 
+        case MT.SET_PLAN:
+        case "set_plan":
+        case "SET_PLAN":
+            if (message.session_title) currentSessionTitle = message.session_title;
+            if (message.milestones && Array.isArray(message.milestones)) {
+                currentMilestones = message.milestones;
+            }
+            if (message.active_index !== undefined) {
+                activeMilestoneIndex = message.active_index;
+            } else if (message.active_milestone_index !== undefined) {
+                activeMilestoneIndex = message.active_milestone_index;
+            }
+            if (message.progress_percent !== undefined) {
+                currentProgress.percent = message.progress_percent;
+            }
+            if (message.current_action) {
+                currentActionSubtext = message.current_action;
+            }
+            saveStoredProgress(currentProgress);
+            updateHudTicker();
+            sendResponse({ status: "success" });
+            break;
+
         case "set_milestone":
         case "SET_MILESTONE":
         case (MT.SET_MILESTONE || "set_milestone"):
-            setMilestone(message.milestone_title || message.title, message.phase_number || message.phase, message.total_phases);
+            if (message.milestone_index !== undefined) {
+                activeMilestoneIndex = message.milestone_index;
+            } else if (message.phase_number !== undefined) {
+                activeMilestoneIndex = message.phase_number;
+            }
+            if (message.milestone_title || message.title) {
+                currentMilestoneTitle = message.milestone_title || message.title;
+                currentIntent = currentMilestoneTitle;
+                if (currentMilestones && currentMilestones.length >= activeMilestoneIndex && activeMilestoneIndex > 0) {
+                    const m = currentMilestones[activeMilestoneIndex - 1];
+                    if (m && typeof m === "object") {
+                        m.title = currentMilestoneTitle;
+                    }
+                }
+            }
+            if (message.phase_number !== undefined && message.total_phases !== undefined) {
+                currentPhaseBadge = `[Phase ${message.phase_number}/${message.total_phases}]`;
+            } else if (message.phase_number !== undefined) {
+                currentPhaseBadge = `[Phase ${message.phase_number}]`;
+            }
+            if (message.current_action) {
+                currentActionSubtext = message.current_action;
+            } else if (message.action_detail) {
+                currentActionSubtext = message.action_detail;
+            }
+            if (message.progress_percent !== undefined) {
+                currentProgress.percent = message.progress_percent;
+            }
+            saveStoredProgress(currentProgress);
+            updateHudTicker();
             sendResponse({ status: "success" });
             break;
 
@@ -1349,24 +1439,65 @@ function renderActiveGlow(sessionTitle, groupColor) {
     topRow.appendChild(leftGroup);
     topRow.appendChild(btnGroup);
 
-    // Row 2: Live micro-action subtext indicator
+    // Row 2: Strategic Milestone Indicator (Spec 32)
+    const milestoneRow = document.createElement("div");
+    milestoneRow.id = "ab-milestone-row";
+    milestoneRow.style.cssText = `
+        display: flex !important;
+        align-items: center !important;
+        gap: 6px !important;
+        font-size: 12px !important;
+        font-weight: 600 !important;
+        color: #cdd6f4 !important;
+        line-height: 1.4 !important;
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        margin-top: 2px !important;
+    `;
+
+    // Row 3: Visual Glowing Progress Track (Spec 32)
+    const progressContainer = document.createElement("div");
+    progressContainer.id = "ab-hud-progress-container";
+    progressContainer.style.cssText = `
+        width: 100% !important;
+        height: 4px !important;
+        background: rgba(255, 255, 255, 0.1) !important;
+        border-radius: 2px !important;
+        margin: 3px 0 4px 0 !important;
+        overflow: hidden !important;
+        display: flex !important;
+    `;
+
+    const progressBar = document.createElement("div");
+    progressBar.id = "ab-hud-progress-bar";
+    progressBar.style.cssText = `
+        height: 100% !important;
+        width: 0% !important;
+        background: linear-gradient(90deg, #38bdf8, #818cf8) !important;
+        border-radius: 2px !important;
+        box-shadow: 0 0 8px rgba(56, 189, 248, 0.5) !important;
+        transition: width 0.3s ease !important;
+    `;
+    progressContainer.appendChild(progressBar);
+
+    // Row 4: Live micro-action ticker (Spec 32)
     const subtextRow = document.createElement("div");
     subtextRow.id = "ab-action-subtext";
     subtextRow.style.cssText = `
         font-size: 11.5px !important;
         color: #a1a1aa !important;
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
-        padding-left: 17px !important;
+        padding-left: 2px !important;
         white-space: nowrap !important;
         overflow: hidden !important;
         text-overflow: ellipsis !important;
         line-height: 1.3 !important;
     `;
-    subtextRow.textContent = isTakeoverActive
-        ? "↳ Solve challenge / 2FA or navigate, then click 'Release to Agent'"
-        : (currentActionSubtext ? `↳ Action: ${currentActionSubtext}` : "");
 
     pill.appendChild(topRow);
+    pill.appendChild(milestoneRow);
+    pill.appendChild(progressContainer);
     pill.appendChild(subtextRow);
     shadow.appendChild(pill);
 
@@ -1425,9 +1556,11 @@ function renderActiveGlow(sessionTitle, groupColor) {
     minPill.appendChild(minLabel);
     minPill.appendChild(minExpand);
     shadow.appendChild(minPill);
+
+    updateHudTicker();
 }
 
-// Live Update Ticker Function (Zero Flickering)
+// Live Update Ticker Function (Zero Flickering, Spec 32)
 function updateHudTicker() {
     const shadow = getOrCreateShadowRoot();
     if (!shadow) return;
@@ -1435,9 +1568,12 @@ function updateHudTicker() {
     const dot = shadow.getElementById ? shadow.getElementById("ab-status-dot") : shadow.querySelector("#ab-status-dot");
     const phase = shadow.getElementById ? shadow.getElementById("ab-phase-badge") : shadow.querySelector("#ab-phase-badge");
     const intent = shadow.getElementById ? shadow.getElementById("ab-intent-text") : shadow.querySelector("#ab-intent-text");
+    const milestoneRow = shadow.getElementById ? shadow.getElementById("ab-milestone-row") : shadow.querySelector("#ab-milestone-row");
+    const progressBar = shadow.getElementById ? shadow.getElementById("ab-hud-progress-bar") : shadow.querySelector("#ab-hud-progress-bar");
     const subtext = shadow.getElementById ? shadow.getElementById("ab-action-subtext") : shadow.querySelector("#ab-action-subtext");
     const minDot = shadow.getElementById ? shadow.getElementById("ab-min-dot") : shadow.querySelector("#ab-min-dot");
     const minLabel = shadow.getElementById ? shadow.getElementById("ab-min-label") : shadow.querySelector("#ab-min-label");
+    const takeoverBtn = shadow.getElementById ? shadow.getElementById("ab-takeover-btn") : shadow.querySelector("#ab-takeover-btn");
 
     const dotColor = isTakeoverActive ? "#f9e2af" : "#a6e3a1";
 
@@ -1452,6 +1588,22 @@ function updateHudTicker() {
         minDot.style.animation = isTakeoverActive ? 'none' : 'agentSocketPulse 1.8s infinite ease-in-out';
     }
 
+    if (takeoverBtn) {
+        if (isTakeoverActive) {
+            takeoverBtn.innerHTML = "<span>Release to Agent</span>";
+            takeoverBtn.style.background = "#0f7b6c";
+            takeoverBtn.style.color = "#ffffff";
+            takeoverBtn.style.border = "1px solid #14b8a6";
+            takeoverBtn.onclick = () => handleRelease();
+        } else {
+            takeoverBtn.innerHTML = "<span>Take Over</span>";
+            takeoverBtn.style.background = "rgba(255, 255, 255, 0.1)";
+            takeoverBtn.style.color = "#e4e4e7";
+            takeoverBtn.style.border = "1px solid rgba(255, 255, 255, 0.2)";
+            takeoverBtn.onclick = () => handleTakeover();
+        }
+    }
+
     if (phase) {
         if (currentPhaseBadge) {
             phase.style.display = "inline-block";
@@ -1462,16 +1614,91 @@ function updateHudTicker() {
     }
 
     if (intent) {
-        intent.textContent = isTakeoverActive ? "Human Takeover Active: Operator in control" : currentIntent;
-    }
-    if (minLabel) {
-        minLabel.textContent = isTakeoverActive ? "Takeover Active" : (currentIntent.length > 24 ? currentIntent.slice(0, 22) + "..." : currentIntent);
+        intent.textContent = isTakeoverActive
+            ? "Human Takeover Active: Operator in control"
+            : (currentIntent || currentSessionTitle || "AgentSocket Task");
     }
 
+    // Spec 32: Milestone text computation
+    let milestoneText = "";
+    let activeTitle = "";
+    if (currentMilestones && currentMilestones.length > 0) {
+        const totalM = currentMilestones.length;
+        const currentIdx = Math.max(1, Math.min(activeMilestoneIndex || 1, totalM));
+        const mObj = currentMilestones[currentIdx - 1];
+        activeTitle = (mObj && typeof mObj === "object" ? mObj.title : mObj) || currentMilestoneTitle || `Milestone ${currentIdx}`;
+        if (isTakeoverActive) {
+            milestoneText = `🔒 Milestone [${currentIdx}/${totalM}]: ${activeTitle} (Paused)`;
+        } else {
+            milestoneText = `🎯 Milestone [${currentIdx}/${totalM}]: ${activeTitle}`;
+        }
+    } else if (currentMilestoneTitle) {
+        activeTitle = currentMilestoneTitle;
+        if (isTakeoverActive) {
+            milestoneText = `🔒 Milestone: ${currentMilestoneTitle} (Paused)`;
+        } else {
+            milestoneText = `🎯 Milestone: ${currentMilestoneTitle}`;
+        }
+    } else {
+        milestoneText = isTakeoverActive ? "🔒 Autonomous Execution (Paused)" : "🎯 Autonomous Execution";
+    }
+
+    if (milestoneRow) {
+        milestoneRow.textContent = milestoneText;
+    }
+
+    // Spec 32: Glowing progress track calculation
+    let calculatedPercent = currentProgress.percent || 0;
+    if (currentMilestones && currentMilestones.length > 0) {
+        let completed = 0;
+        currentMilestones.forEach((m, i) => {
+            if (m && typeof m === "object" && m.status === "completed") {
+                completed++;
+            } else if (i + 1 < (activeMilestoneIndex || 1)) {
+                completed++;
+            }
+        });
+        const derived = Math.round((completed / currentMilestones.length) * 100);
+        calculatedPercent = Math.max(calculatedPercent, derived);
+    }
+    calculatedPercent = Math.min(Math.max(calculatedPercent, 0), 100);
+
+    if (progressBar) {
+        progressBar.style.width = `${calculatedPercent}%`;
+        if (isTakeoverActive) {
+            progressBar.style.background = "linear-gradient(90deg, #f59e0b, #d97706)";
+            progressBar.style.boxShadow = "0 0 8px rgba(245, 158, 11, 0.5)";
+        } else {
+            progressBar.style.background = "linear-gradient(90deg, #38bdf8, #818cf8)";
+            progressBar.style.boxShadow = "0 0 8px rgba(56, 189, 248, 0.5)";
+        }
+    }
+
+    // Spec 32: Live micro-action ticker
     if (subtext) {
-        subtext.textContent = isTakeoverActive
-            ? "↳ Solve challenge / 2FA or navigate, then click 'Release to Agent'"
-            : (currentActionSubtext ? `↳ Action: ${currentActionSubtext}` : "");
+        if (isTakeoverActive) {
+            subtext.textContent = "↳ Human Takeover Active: Operator in control (Click 'Release to Agent' when ready)";
+            subtext.style.color = "#fcd34d";
+        } else {
+            let actionStr = currentActionSubtext || "(Observing page state...)";
+            if (!actionStr.startsWith("↳ Action:") && !actionStr.startsWith("↳")) {
+                subtext.textContent = `↳ Action: ${actionStr}`;
+            } else {
+                subtext.textContent = actionStr;
+            }
+            subtext.style.color = "#a1a1aa";
+        }
+    }
+
+    if (minLabel) {
+        if (isTakeoverActive) {
+            minLabel.textContent = "Takeover Active";
+        } else if (activeTitle) {
+            const shortTitle = activeTitle.length > 20 ? activeTitle.slice(0, 18) + "..." : activeTitle;
+            minLabel.textContent = `M[${activeMilestoneIndex || 1}]: ${shortTitle}`;
+        } else {
+            minLabel.textContent = currentIntent.length > 24 ? currentIntent.slice(0, 22) + "..." : currentIntent;
+        }
     }
 }
 
@@ -1493,7 +1720,13 @@ function setIntent(intent, subtext, phase) {
 }
 
 function setMilestone(title, phaseNumber, totalPhases) {
-    if (title) currentIntent = String(title);
+    if (title) {
+        currentIntent = String(title);
+        currentMilestoneTitle = String(title);
+    }
+    if (phaseNumber !== undefined) {
+        activeMilestoneIndex = parseInt(phaseNumber, 10) || activeMilestoneIndex;
+    }
     if (phaseNumber !== undefined && totalPhases !== undefined) {
         currentPhaseBadge = `[Phase ${phaseNumber}/${totalPhases}]`;
     } else if (phaseNumber !== undefined) {
@@ -1632,147 +1865,38 @@ function showInterventionTooltip(x, y) {
 }
 
 // ============================================================================
-// 2. TAKEOVER / LOCKOUT STATE: Operator in Control (Shield Removed)
+// 2. TAKEOVER / LOCKOUT STATE: Operator in Control (BUG-04 Layout-Popping Fixed)
 // ============================================================================
 function renderTakeoverUI(sessionTitle) {
-    const shadow = getOrCreateShadowRoot();
-    clearShadowContent(shadow);
+    if (sessionTitle) currentSessionTitle = sessionTitle;
     isShieldActive = false;
     isTakeoverActive = true;
 
-    // Subtle dashed frame to signify operator takeover
-    const lockFrame = document.createElement("div");
-    lockFrame.style.cssText = `
-        position: fixed !important;
-        top: 0 !important;
-        left: 0 !important;
-        right: 0 !important;
-        bottom: 0 !important;
-        width: 100vw !important;
-        height: 100vh !important;
-        pointer-events: none !important;
-        border: 3px dashed rgba(235, 87, 87, 0.7) !important;
-        box-sizing: border-box !important;
-        z-index: 2147483645 !important;
-    `;
-    shadow.appendChild(lockFrame);
+    const shadow = getOrCreateShadowRoot();
+    if (!shadow) return;
 
-    const pill = document.createElement("div");
-    pill.id = "ab-takeover-pill";
-    pill.style.cssText = `
-        position: fixed !important;
-        bottom: 20px !important;
-        left: 50% !important;
-        transform: translateX(-50%) !important;
-        z-index: 2147483647 !important;
-        pointer-events: auto !important;
-        background: #202020 !important;
-        border: 1px solid #4a2729 !important;
-        border-radius: 18px !important;
-        padding: 10px 16px 9px 16px !important;
-        color: #e3e2de !important;
-        display: flex !important;
-        flex-direction: column !important;
-        gap: 7px !important;
-        min-width: 360px !important;
-        max-width: 90vw !important;
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6) !important;
-        animation: agentSocketFadeInUp 0.2s ease-out !important;
-        box-sizing: border-box !important;
-    `;
+    let pill = shadow.getElementById ? shadow.getElementById("ab-control-pill") : shadow.querySelector("#ab-control-pill");
+    if (!pill) {
+        renderActiveGlow(currentSessionTitle, currentGroupColor);
+        isShieldActive = false;
+        isTakeoverActive = true;
+    }
 
-    // Row 1: Lock Header & Actions
-    const topRow = document.createElement("div");
-    topRow.style.cssText = `
-        display: flex !important;
-        align-items: center !important;
-        justify-content: space-between !important;
-        width: 100% !important;
-        gap: 12px !important;
-    `;
+    // Lift lockout shield so operator can interact freely
+    const shield = shadow.getElementById ? shadow.getElementById("ab-interaction-shield") : shadow.querySelector("#ab-interaction-shield");
+    if (shield) {
+        shield.style.pointerEvents = "none";
+        shield.style.display = "none";
+    }
 
-    const leftGroup = document.createElement("div");
-    leftGroup.style.cssText = `display: flex; align-items: center; gap: 8px;`;
+    // Transition glow frame to subtle dashed amber outline
+    const glowFrame = shadow.getElementById ? shadow.getElementById("ab-glow-frame") : shadow.querySelector("#ab-glow-frame");
+    if (glowFrame) {
+        glowFrame.style.border = "3px dashed rgba(249, 226, 175, 0.7)";
+        glowFrame.style.boxShadow = "inset 0 0 24px rgba(249, 226, 175, 0.2)";
+    }
 
-    // Red Lock Status Dot
-    const dot = document.createElement("span");
-    dot.style.cssText = `
-        width: 8px;
-        height: 8px;
-        background: #ff7369;
-        border-radius: 50%;
-        display: inline-block;
-        flex-shrink: 0;
-        box-shadow: 0 0 8px #ff7369;
-    `;
-
-    const label = document.createElement("div");
-    label.style.cssText = `
-        font-weight: 500;
-        color: #ff7369;
-        font-size: 12.5px;
-    `;
-    label.innerHTML = `<span>🔒 Operator Active</span>`;
-
-    leftGroup.appendChild(dot);
-    leftGroup.appendChild(label);
-
-    const btnGroup = document.createElement("div");
-    btnGroup.style.cssText = `display: flex; align-items: center; gap: 8px; flex-shrink: 0;`;
-
-    // Stop button
-    const stopBtn = document.createElement("button");
-    stopBtn.className = "ab-btn";
-    stopBtn.innerHTML = "<span>⏹</span> <span>Stop</span>";
-    stopBtn.style.cssText += `
-        background: #282828;
-        border: 1px solid #333333;
-        color: #9b9b9b;
-        font-size: 12px !important;
-        padding: 4px 10px !important;
-        border-radius: 12px !important;
-    `;
-    stopBtn.onmouseenter = () => { stopBtn.style.background = "#303030"; stopBtn.style.color = "#e3e2de"; };
-    stopBtn.onmouseleave = () => { stopBtn.style.background = "#282828"; stopBtn.style.color = "#9b9b9b"; };
-    stopBtn.onclick = () => {
-        chrome.runtime.sendMessage({ type: MT.PAGE_STOP });
-        removeAllUI();
-    };
-
-    // Release / Resume button
-    const resumeBtn = document.createElement("button");
-    resumeBtn.className = "ab-btn";
-    resumeBtn.innerHTML = "<span>▶</span> <span>Release to Agent</span>";
-    resumeBtn.style.cssText += `
-        background: #0f7b6c;
-        color: #ffffff;
-        font-size: 12px !important;
-        padding: 4px 12px !important;
-        border-radius: 12px !important;
-    `;
-    resumeBtn.onmouseenter = () => { resumeBtn.style.background = "#0b675a"; };
-    resumeBtn.onmouseleave = () => { resumeBtn.style.background = "#0f7b6c"; };
-    resumeBtn.onclick = () => {
-        renderNotesModal(sessionTitle);
-    };
-
-    btnGroup.appendChild(stopBtn);
-    btnGroup.appendChild(resumeBtn);
-
-    topRow.appendChild(leftGroup);
-    topRow.appendChild(btnGroup);
-
-    // Row 2: Progress Section with Operator Note
-    const progressDataCopy = {
-        ...currentProgress,
-        stepTitle: currentProgress.stepTitle ? `${currentProgress.stepTitle} (Paused)` : "Paused for Operator"
-    };
-    const progressSection = createProgressSection(progressDataCopy, getThemeColors("red"));
-
-    pill.appendChild(topRow);
-    pill.appendChild(progressSection);
-
-    shadow.appendChild(pill);
+    updateHudTicker();
 }
 
 // ============================================================================
@@ -1818,14 +1942,14 @@ function renderNotesModal(sessionTitle) {
     const title = document.createElement("h3");
     title.innerText = "Handoff Notes to Agent";
     title.style.cssText = `
-        margin: 0 0 6px 0;
+        margin: 0 0 8px 0;
         font-size: 14px;
         font-weight: 600;
         color: #ffffff;
     `;
 
     const desc = document.createElement("p");
-    desc.innerText = "Describe what you completed so the agent can adapt smoothly:";
+    desc.innerText = "Briefly explain what you did, or leave instructions for the agent to proceed.";
     desc.style.cssText = `
         margin: 0 0 12px 0;
         font-size: 12px;
@@ -1834,18 +1958,18 @@ function renderNotesModal(sessionTitle) {
     `;
 
     const textarea = document.createElement("textarea");
-    textarea.placeholder = "e.g. Solved CAPTCHA and navigated to checkout page...";
+    textarea.placeholder = "e.g., Solved CAPTCHA and logged into dashboard.";
     textarea.style.cssText = `
         width: 100%;
-        height: 72px;
-        box-sizing: border-box;
-        background: #191919;
-        color: #e3e2de;
+        height: 80px;
+        background: #141414;
         border: 1px solid #333333;
-        border-radius: 5px;
+        border-radius: 6px;
         padding: 8px 10px;
-        font-size: 12px;
+        color: #e3e2de;
         font-family: inherit;
+        font-size: 12px;
+        box-sizing: border-box;
         resize: none;
         margin-bottom: 14px;
         outline: none;
@@ -1952,8 +2076,9 @@ if (typeof module !== "undefined" && module.exports) {
         handleTakeover,
         handleRelease,
         toggleMinimize,
+        renderActiveGlow,
+        renderTakeoverUI,
         renderLiveIntentHUD,
         updateHudTicker
     };
 }
-

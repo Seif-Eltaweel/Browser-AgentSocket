@@ -380,6 +380,64 @@ def execute_action(
 
 
 # ============================================================================
+# Strategic Plan & Milestones Client Helpers (Spec 32)
+# ============================================================================
+
+def session_set_plan(
+    session_title: str,
+    milestones: list[dict[str, Any] | str],
+    active_index: int = 1,
+    server_url: str = DEFAULT_SERVER_URL,
+) -> dict[str, Any]:
+    """Registers strategic execution milestones with the gateway and extension HUD (Spec 32)."""
+    ensure_ready(server_url)
+    payload = {
+        "session_title": session_title,
+        "milestones": milestones,
+        "active_milestone_index": active_index,
+    }
+    try:
+        resp = requests.post(f"{server_url}/plan", json=payload, headers=get_auth_headers(), timeout=20.0)
+        return resp.json()
+    except Exception as e:
+        return {
+            "status": ResponseStatus.ERROR.value,
+            "message": f"Plan registration failed: {e}",
+            "error": {"code": ErrorCode.INTERNAL_ERROR.value, "message": str(e)},
+        }
+
+
+def session_update_milestone(
+    session_title: str,
+    milestone_index: int | None = None,
+    milestone_title: str | None = None,
+    action_detail: str | None = None,
+    status: str | None = None,
+    server_url: str = DEFAULT_SERVER_URL,
+) -> dict[str, Any]:
+    """Updates active milestone state or action detail with the gateway and extension HUD (Spec 32)."""
+    ensure_ready(server_url)
+    payload: dict[str, Any] = {"session_title": session_title}
+    if milestone_index is not None:
+        payload["milestone_index"] = milestone_index
+    if milestone_title is not None:
+        payload["milestone_title"] = milestone_title
+    if action_detail is not None:
+        payload["action_detail"] = action_detail
+    if status is not None:
+        payload["status"] = status
+    try:
+        resp = requests.post(f"{server_url}/plan/milestone", json=payload, headers=get_auth_headers(), timeout=20.0)
+        return resp.json()
+    except Exception as e:
+        return {
+            "status": ResponseStatus.ERROR.value,
+            "message": f"Milestone update failed: {e}",
+            "error": {"code": ErrorCode.INTERNAL_ERROR.value, "message": str(e)},
+        }
+
+
+# ============================================================================
 # Atomic Operator Client Helpers (Spec 24)
 # ============================================================================
 
@@ -387,6 +445,7 @@ def browser_observe(
     tab_group_id: int | None = None,
     session_title: str | None = None,
     take_screenshot: bool = False,
+    action_detail: str | None = None,
     server_url: str = DEFAULT_SERVER_URL,
 ) -> dict[str, Any]:
     """Captures ARIA tree, assigns ephemeral numeric badges [1]..[N], and returns structured DOM snapshot."""
@@ -395,6 +454,7 @@ def browser_observe(
         "tab_group_id": tab_group_id,
         "session_title": session_title,
         "take_screenshot": take_screenshot,
+        "action_detail": action_detail,
     }
     try:
         resp = requests.post(f"{server_url}/observe", json=payload, headers=get_auth_headers(), timeout=20.0)
@@ -411,6 +471,7 @@ def browser_click(
     element_id: int,
     tab_group_id: int | None = None,
     session_title: str | None = None,
+    action_detail: str | None = None,
     wait_settle: bool = True,
     server_url: str = DEFAULT_SERVER_URL,
 ) -> dict[str, Any]:
@@ -421,6 +482,7 @@ def browser_click(
         "element_id": element_id,
         "tab_group_id": tab_group_id,
         "session_title": session_title,
+        "action_detail": action_detail,
         "wait_settle": wait_settle,
     }
     try:
@@ -439,6 +501,7 @@ def browser_type(
     text: str,
     tab_group_id: int | None = None,
     session_title: str | None = None,
+    action_detail: str | None = None,
     clear_first: bool = False,
     press_enter: bool = False,
     server_url: str = DEFAULT_SERVER_URL,
@@ -451,6 +514,7 @@ def browser_type(
         "text": text,
         "tab_group_id": tab_group_id,
         "session_title": session_title,
+        "action_detail": action_detail,
         "clear_first": clear_first,
         "press_enter": press_enter,
     }
@@ -470,6 +534,7 @@ def browser_scroll(
     amount: int | None = None,
     tab_group_id: int | None = None,
     session_title: str | None = None,
+    action_detail: str | None = None,
     server_url: str = DEFAULT_SERVER_URL,
 ) -> dict[str, Any]:
     """Scrolls viewport ('down', 'up', 'top', 'bottom')."""
@@ -480,6 +545,7 @@ def browser_scroll(
         "amount": amount,
         "tab_group_id": tab_group_id,
         "session_title": session_title,
+        "action_detail": action_detail,
     }
     try:
         resp = requests.post(f"{server_url}/act", json=payload, headers=get_auth_headers(), timeout=20.0)
@@ -865,18 +931,11 @@ def register_subskill(
 
 
 # ============================================================================
-# Central Adhocs Vault & Resolution API Helpers (Spec 18)
+# Central Adhocs Vault & Resolution API Helpers (Permanently Retired - Spec 33)
 # ============================================================================
 def list_adhocs(server_url: str = DEFAULT_SERVER_URL) -> list[dict[str, Any]]:
-    """Lists universal shared adhoc tools from the central vault."""
-    if is_server_running(server_url):
-        try:
-            resp = requests.get(f"{server_url}/adhocs", headers=get_auth_headers(), timeout=5.0)
-            if resp.status_code == 200:
-                return resp.json()
-        except Exception:
-            pass
-    return session_manager.list_adhocs()
+    """[PERMANENTLY RETIRED - Spec 33] Returns empty list."""
+    return []
 
 
 def promote_adhoc(
@@ -886,26 +945,15 @@ def promote_adhoc(
     subskill_name: str | None = None,
     server_url: str = DEFAULT_SERVER_URL,
 ) -> dict[str, Any]:
-    """Promotes a session adhoc tool to universal or subskill vault."""
-    if is_server_running(server_url):
-        try:
-            payload = {
-                "session_path": session_path,
-                "tool_name": tool_name,
-                "target": target,
-                "subskill_name": subskill_name,
-            }
-            resp = requests.post(f"{server_url}/adhocs/promote", json=payload, headers=get_auth_headers(), timeout=8.0)
-            if resp.status_code == 200:
-                return resp.json()
-        except Exception:
-            pass
-    return session_manager.promote_adhoc(
-        session_path=session_path,
-        tool_name=tool_name,
-        target=target,
-        subskill_name=subskill_name,
-    )
+    """[PERMANENTLY RETIRED - Spec 33] Returns deprecation error."""
+    return {
+        "status": "error",
+        "code": "ADHOC_ARCHITECTURE_DEPRECATED",
+        "message": (
+            "Adhoc script promotion has been permanently retired under Spec 33. "
+            "All browser automation MUST be driven turn-by-turn using atomic OODA tools."
+        ),
+    }
 
 
 def resolve_adhoc(
@@ -913,18 +961,11 @@ def resolve_adhoc(
     session_path: str | None = None,
     server_url: str = DEFAULT_SERVER_URL,
 ) -> dict[str, Any]:
-    """Resolves an adhoc tool through the 3-tier hierarchical resolution pipeline."""
-    if is_server_running(server_url):
-        try:
-            params = {"tool_name": tool_name}
-            if session_path:
-                params["session_path"] = session_path
-            resp = requests.get(f"{server_url}/adhocs/resolve", params=params, headers=get_auth_headers(), timeout=5.0)
-            if resp.status_code == 200:
-                return resp.json()
-        except Exception:
-            pass
-    return session_manager.resolve_adhoc(tool_name=tool_name, session_dir_or_path=session_path)
+    """[PERMANENTLY RETIRED - Spec 33] Returns deprecation error."""
+    return {
+        "found": False,
+        "error": "Adhoc script resolution has been permanently retired under Spec 33.",
+    }
 
 
 def run_adhoc(
@@ -933,23 +974,73 @@ def run_adhoc(
     args: list[str] | None = None,
     server_url: str = DEFAULT_SERVER_URL,
 ) -> dict[str, Any]:
-    """Runs an adhoc script via the 3-tier resolution pipeline."""
+    """[PERMANENTLY RETIRED - Spec 33] Returns deprecation error."""
+    return {
+        "status": "error",
+        "code": "ADHOC_ARCHITECTURE_DEPRECATED",
+        "message": (
+            "Adhoc script execution has been permanently retired under Spec 33. "
+            "All browser automation MUST be driven turn-by-turn using atomic OODA tools: "
+            "browser_observe, browser_click, browser_type, browser_scroll, browser_key_press."
+        ),
+    }
+
+
+def session_set_plan(
+    session_title: str,
+    milestones: list[str] | list[dict[str, Any]],
+    active_index: int = 1,
+    server_url: str = DEFAULT_SERVER_URL,
+) -> dict[str, Any]:
+    """Registers strategic execution milestones for a session."""
     if is_server_running(server_url):
         try:
             payload = {
-                "tool_name": tool_name,
-                "session_path": session_path,
-                "args": args or [],
+                "session_title": session_title,
+                "milestones": milestones,
+                "active_milestone_index": active_index,
             }
-            resp = requests.post(f"{server_url}/adhocs/run", json=payload, headers=get_auth_headers(), timeout=65.0)
+            resp = requests.post(f"{server_url}/plan", json=payload, headers=get_auth_headers(), timeout=8.0)
             if resp.status_code == 200:
                 return resp.json()
-        except Exception:
-            pass
-    return session_manager.run_adhoc(
-        tool_name=tool_name,
-        session_dir_or_path=session_path,
-        args=args,
+        except Exception as e:
+            logger.warning(f"Failed to post plan to gateway: {e}")
+    return session_manager.set_session_plan(
+        session_title=session_title,
+        milestones=milestones,
+        active_index=active_index,
+    )
+
+
+def session_update_milestone(
+    session_title: str,
+    milestone_index: int | None = None,
+    milestone_title: str | None = None,
+    action_detail: str | None = None,
+    status: str | None = None,
+    server_url: str = DEFAULT_SERVER_URL,
+) -> dict[str, Any]:
+    """Updates active milestone state or broadcasts live ticker detail."""
+    if is_server_running(server_url):
+        try:
+            payload = {
+                "session_title": session_title,
+                "milestone_index": milestone_index,
+                "milestone_title": milestone_title,
+                "action_detail": action_detail,
+                "status": status,
+            }
+            resp = requests.post(f"{server_url}/plan/milestone", json=payload, headers=get_auth_headers(), timeout=8.0)
+            if resp.status_code == 200:
+                return resp.json()
+        except Exception as e:
+            logger.warning(f"Failed to post milestone update to gateway: {e}")
+    return session_manager.update_session_milestone(
+        session_title=session_title,
+        milestone_index=milestone_index,
+        milestone_title=milestone_title,
+        action_detail=action_detail,
+        status=status,
     )
 
 
@@ -1078,39 +1169,15 @@ def cmd_progress(args: argparse.Namespace) -> None:
 
 
 def cmd_adhocs(args: argparse.Namespace) -> None:
-    action = getattr(args, "adhocs_command", "list") or "list"
-    if action == "list":
-        results = list_adhocs()
-        if getattr(args, "json", False):
-            print(json.dumps(results, indent=2))
-        else:
-            print("\n" + "=" * 90)
-            print(f"{'TOOL NAME':<25} | {'SIZE (BYTES)':<12} | {'PURPOSE / DOCSTRING'}")
-            print("=" * 90)
-            for t in results:
-                print(f"{t.get('name', ''):<25} | {str(t.get('size', '-')):<12} | {t.get('doc', '')[:45]}")
-            print("=" * 90 + "\n")
-
-    elif action == "promote":
-        res = promote_adhoc(
-            session_path=args.session,
-            tool_name=args.tool,
-            target=args.target,
-            subskill_name=args.subskill,
+    print(json.dumps({
+        "status": "error",
+        "code": "ADHOC_ARCHITECTURE_DEPRECATED",
+        "message": (
+            "Adhoc script execution has been permanently retired under Spec 33. "
+            "All browser automation MUST be driven turn-by-turn using atomic OODA tools "
+            "(browser_observe, browser_click, browser_type, browser_scroll, task_complete)."
         )
-        print(json.dumps(res, indent=2))
-
-    elif action == "resolve":
-        res = resolve_adhoc(tool_name=args.tool, session_path=args.session)
-        print(json.dumps(res, indent=2))
-
-    elif action == "run":
-        res = run_adhoc(
-            tool_name=args.tool,
-            session_path=args.session,
-            args=args.args,
-        )
-        print(json.dumps(res, indent=2))
+    }, indent=2))
 
 
 COMMAND_DISPATCH: dict[str, Callable[[argparse.Namespace], None]] = {
@@ -1129,7 +1196,6 @@ COMMAND_DISPATCH: dict[str, Callable[[argparse.Namespace], None]] = {
     "thread": cmd_thread,
     "export-all": cmd_export_all,
     "subskills": cmd_subskills,
-    "adhocs": cmd_adhocs,
 }
 
 
@@ -1212,30 +1278,6 @@ def build_cli_parser() -> argparse.ArgumentParser:
     sk_reg.add_argument("--tags", default=None, help="Comma-separated tags")
     sk_reg.add_argument("--tools", default=None, help="Comma-separated adhoc tool filenames")
     sk_reg.add_argument("--json", action="store_true", help="Output raw JSON")
-
-    adhocs_parser = subparsers.add_parser("adhocs", help="Manage and execute shared & subskill adhoc tools (Spec 18)")
-    adhocs_sub = adhocs_parser.add_subparsers(dest="adhocs_command", help="Adhocs action")
-
-    adh_list = adhocs_sub.add_parser("list", help="List universal shared adhoc tools in central vault")
-    adh_list.add_argument("--json", action="store_true", help="Output raw JSON")
-
-    adh_promote = adhocs_sub.add_parser("promote", help="Promote a session adhoc tool to universal or subskill vault")
-    adh_promote.add_argument("--session", required=True, help="Path to session folder containing tool in adhocs/")
-    adh_promote.add_argument("--tool", required=True, help="Filename of the adhoc script to promote")
-    adh_promote.add_argument("--target", choices=["universal", "subskill"], default="universal", help="Target vault")
-    adh_promote.add_argument("--subskill", default=None, help="Target subskill name (if target is subskill)")
-    adh_promote.add_argument("--json", action="store_true", help="Output raw JSON")
-
-    adh_resolve = adhocs_sub.add_parser("resolve", help="Resolve tool path through 3-tier hierarchy")
-    adh_resolve.add_argument("--tool", required=True, help="Filename of the adhoc script")
-    adh_resolve.add_argument("--session", default=None, help="Optional session path for local & borrowed subskill resolution")
-    adh_resolve.add_argument("--json", action="store_true", help="Output raw JSON")
-
-    adh_run = adhocs_sub.add_parser("run", help="Execute an adhoc tool via hierarchical resolution")
-    adh_run.add_argument("--tool", required=True, help="Filename of the adhoc script")
-    adh_run.add_argument("--session", default=None, help="Optional session path for context")
-    adh_run.add_argument("args", nargs="*", help="Arguments to pass to the adhoc script")
-    adh_run.add_argument("--json", action="store_true", help="Output raw JSON")
 
     return parser
 

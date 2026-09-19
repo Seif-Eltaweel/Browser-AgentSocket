@@ -41,6 +41,7 @@
         HIDE_GLOW: "hide_glow",
         UPDATE_PROGRESS: "update_progress",
         SET_INTENT: "set_intent",
+        SET_PLAN: "set_plan",
         SET_MILESTONE: "set_milestone",
 
         // Popup / Auth <-> Background

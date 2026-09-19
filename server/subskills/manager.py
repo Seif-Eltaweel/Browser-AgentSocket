@@ -475,7 +475,7 @@ Automate standard operating procedure for {display_title or slug}.
         if os.path.exists(sub_skill_file):
             shutil.copy2(sub_skill_file, dst_playbook)
 
-        # Handle adhocs if present
+        # Spec 18/33: Maintain backward-compatible adhoc copy if candidates explicitly provided
         promoted_tools: list[str] = []
         if os.path.exists(adhocs_dir):
             vault_adhocs_dir = os.path.join(vault_subskill_dir, "adhocs")

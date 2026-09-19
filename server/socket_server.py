@@ -49,6 +49,10 @@ from server.models import (
     SetIntentRequest,
     ScreenshotRequest,
     TaskCompleteRequest,
+    MilestoneStatus,
+    PlanMilestone,
+    PlanPayload,
+    UpdateMilestonePayload,
 )
 from server.session import session_manager
 
@@ -452,6 +456,68 @@ async def update_progress(payload: ProgressPayload) -> dict[str, Any]:
             "step_title": payload.step_title,
             "warning": "Extension WebSocket offline - progress logged locally",
         }
+
+
+# ============================================================================
+# Strategic Plan & Milestones Endpoints (Spec 32)
+# ============================================================================
+
+@app.post("/plan")
+async def register_plan_endpoint(payload: PlanPayload) -> dict[str, Any]:
+    state.record_activity()
+    plan_res = session_manager.set_session_plan(
+        session_title=payload.session_title,
+        milestones=payload.milestones,
+        active_index=payload.active_milestone_index or 1,
+    )
+
+    if state.extension_ws:
+        try:
+            await state.extension_ws.send_text(json.dumps({
+                "type": WSMessageType.SET_PLAN.value,
+                "session_title": payload.session_title,
+                "milestones": plan_res["milestones"],
+                "active_index": plan_res["active_index"],
+                "progress_percent": plan_res["progress_percent"],
+            }))
+        except Exception as e:
+            logger.warning(f"Error forwarding set_plan frame to extension: {e}")
+
+    return {
+        "status": "success",
+        "session_title": payload.session_title,
+        "total_milestones": plan_res["total_milestones"],
+        "active_index": plan_res["active_index"],
+        "progress_percent": plan_res["progress_percent"],
+        "milestones": plan_res["milestones"],
+    }
+
+
+@app.post("/plan/milestone")
+async def update_milestone_endpoint(payload: UpdateMilestonePayload) -> dict[str, Any]:
+    state.record_activity()
+    milestone_res = session_manager.update_session_milestone(
+        session_title=payload.session_title,
+        milestone_index=payload.milestone_index,
+        milestone_title=payload.milestone_title,
+        action_detail=payload.action_detail,
+        status=payload.status,
+    )
+
+    if state.extension_ws:
+        try:
+            await state.extension_ws.send_text(json.dumps({
+                "type": WSMessageType.SET_MILESTONE.value,
+                "session_title": payload.session_title,
+                "milestone_index": milestone_res["milestone_index"],
+                "milestone_title": milestone_res["milestone_title"],
+                "current_action": milestone_res["current_action"],
+                "progress_percent": milestone_res["progress_percent"],
+            }))
+        except Exception as e:
+            logger.warning(f"Error forwarding set_milestone frame to extension: {e}")
+
+    return milestone_res
 
 
 
@@ -895,13 +961,47 @@ async def execute_to_extension(command: AgentActionPayload) -> dict[str, Any]:
 # Atomic OODA RPC Dispatch Handlers (Spec 23)
 # ============================================================================
 
-async def observe_page(tab_group_id: int | None = None, take_screenshot: bool = False, session_title: str | None = None) -> dict[str, Any]:
+async def observe_page(
+    tab_group_id: int | None = None,
+    take_screenshot: bool = False,
+    session_title: str | None = None,
+    action_detail: str | None = None,
+) -> dict[str, Any]:
     state.record_activity()
     if tab_group_id is None and session_title:
         active_sess = session_manager.get_active_session_by_title(session_title)
         if active_sess:
             tab_group_id = active_sess.tab_group_id
     session = state.get_session(tab_group_id)
+
+    if action_detail:
+        session_manager.update_session_milestone(
+            session_title=session_title or "",
+            action_detail=action_detail,
+            tab_group_id=session.tab_group_id,
+        )
+        if state.extension_ws:
+            try:
+                active_sess = session_manager.get_active_session_by_group_id(session.tab_group_id)
+                m_title = ""
+                m_idx = 1
+                prog_pct = 0
+                if active_sess and active_sess.milestones:
+                    m_idx = active_sess.active_milestone_index or 1
+                    if 1 <= m_idx <= len(active_sess.milestones):
+                        m_title = active_sess.milestones[m_idx - 1].title
+                    completed = sum(1 for m in active_sess.milestones if m.status in (MilestoneStatus.COMPLETED, "completed"))
+                    prog_pct = int((completed / len(active_sess.milestones)) * 100)
+                await state.extension_ws.send_text(json.dumps({
+                    "type": WSMessageType.SET_MILESTONE.value,
+                    "session_title": session_title or (active_sess.tab_group_name if active_sess else ""),
+                    "milestone_index": m_idx,
+                    "milestone_title": m_title,
+                    "current_action": action_detail,
+                    "progress_percent": prog_pct,
+                }))
+            except Exception as e:
+                logger.warning(f"Failed to dispatch milestone ticker on observe: {e}")
 
     if session.human_in_control:
         return {
@@ -1012,6 +1112,35 @@ async def act_element(payload: ActRequest) -> dict[str, Any]:
             "message": "Human operator is currently in control of the browser session.",
         }
 
+    if payload.action_detail:
+        session_manager.update_session_milestone(
+            session_title=payload.session_title or "",
+            action_detail=payload.action_detail,
+            tab_group_id=session.tab_group_id,
+        )
+        if state.extension_ws:
+            try:
+                active_sess = session_manager.get_active_session_by_group_id(session.tab_group_id)
+                m_title = ""
+                m_idx = 1
+                prog_pct = 0
+                if active_sess and active_sess.milestones:
+                    m_idx = active_sess.active_milestone_index or 1
+                    if 1 <= m_idx <= len(active_sess.milestones):
+                        m_title = active_sess.milestones[m_idx - 1].title
+                    completed = sum(1 for m in active_sess.milestones if m.status in (MilestoneStatus.COMPLETED, "completed"))
+                    prog_pct = int((completed / len(active_sess.milestones)) * 100)
+                await state.extension_ws.send_text(json.dumps({
+                    "type": WSMessageType.SET_MILESTONE.value,
+                    "session_title": payload.session_title or (active_sess.tab_group_name if active_sess else ""),
+                    "milestone_index": m_idx,
+                    "milestone_title": m_title,
+                    "current_action": payload.action_detail,
+                    "progress_percent": prog_pct,
+                }))
+            except Exception as e:
+                logger.warning(f"Failed to dispatch milestone ticker on act: {e}")
+
     # Flaw 4 Fix: Extract intervention notes and clear cache without dropping action payload!
     intervention_notes = None
     if session.last_intervention_notes:
@@ -1059,6 +1188,7 @@ async def act_element(payload: ActRequest) -> dict[str, Any]:
         "amount": payload.amount,
         "key": payload.key,
         "wait_settle": payload.wait_settle,
+        "action_detail": payload.action_detail,
     }
 
     t0 = time.time()
@@ -1298,7 +1428,12 @@ async def finalize_task_complete(
 @app.post("/observe")
 async def observe_endpoint(payload: ObserveRequest) -> dict[str, Any]:
     state.record_activity()
-    return await observe_page(tab_group_id=payload.tab_group_id, take_screenshot=payload.take_screenshot, session_title=payload.session_title)
+    return await observe_page(
+        tab_group_id=payload.tab_group_id,
+        take_screenshot=payload.take_screenshot,
+        session_title=payload.session_title,
+        action_detail=payload.action_detail,
+    )
 
 
 @app.post("/act")

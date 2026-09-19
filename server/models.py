@@ -35,6 +35,8 @@ class WSMessageType(str, Enum):
     ACT_RESPONSE = "act_response"
     AUTH_REQUEST = "auth_request"
     AUTH_RESPONSE = "auth_response"
+    SET_PLAN = "set_plan"
+    SET_MILESTONE = "set_milestone"
 
 # who is in control 
 class ControlMode(str, Enum):
@@ -100,6 +102,58 @@ class ProgressPayload(BaseModel):
     step_title: str = Field(..., min_length=1, description="Detailed human-readable step description provided by the agent")
 
 
+# ============================================================================
+# Strategic Milestones & Plan Presentation Schemas (Spec 32)
+# ============================================================================
+
+class MilestoneStatus(str, Enum):
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class PlanMilestone(BaseModel):
+    index: int = Field(..., description="1-indexed milestone sequence number")
+    title: str = Field(..., min_length=1, description="Strategic milestone title")
+    description: str | None = Field(default=None, description="Optional milestone details or goal")
+    status: MilestoneStatus = Field(default=MilestoneStatus.PENDING, description="Current milestone lifecycle state")
+
+
+class PlanPayload(BaseModel):
+    session_title: str = Field(..., min_length=1, description="Target session title")
+    milestones: list[PlanMilestone | str] = Field(..., min_length=1, description="List of planned strategic milestones")
+    active_milestone_index: int | None = Field(default=1, description="Currently active milestone index")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_milestones(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            raw_milestones = data.get("milestones", [])
+            normalized = []
+            for idx, item in enumerate(raw_milestones, start=1):
+                if isinstance(item, str):
+                    normalized.append(PlanMilestone(index=idx, title=item, status=MilestoneStatus.PENDING))
+                elif isinstance(item, dict):
+                    m_idx = item.get("index", idx)
+                    m_title = item.get("title", f"Milestone {m_idx}")
+                    m_status = item.get("status", MilestoneStatus.PENDING)
+                    m_desc = item.get("description")
+                    normalized.append(PlanMilestone(index=m_idx, title=m_title, description=m_desc, status=m_status))
+                elif isinstance(item, PlanMilestone):
+                    normalized.append(item)
+            data["milestones"] = normalized
+        return data
+
+
+class UpdateMilestonePayload(BaseModel):
+    session_title: str = Field(..., min_length=1, description="Target session title")
+    milestone_index: int | None = Field(default=None, description="Milestone sequence index")
+    milestone_title: str | None = Field(default=None, description="Milestone title update")
+    action_detail: str | None = Field(default=None, description="Live atomic action ticker subtext")
+    status: MilestoneStatus | None = Field(default=None, description="Updated milestone lifecycle status")
+
+
 class ReleasePayload(BaseModel):
     notes: str | None = Field(default=None, description="Handoff notes from the human operator")
     tab_group_id: int | None = Field(default=None, description="Optional target tab group ID to release")
@@ -113,6 +167,7 @@ class ObserveRequest(BaseModel):
     tab_group_id: int | None = None
     session_title: str | None = None
     take_screenshot: bool = False
+    action_detail: str | None = None
 
 
 class ObserveResponse(BaseModel):
@@ -137,6 +192,7 @@ class ActRequest(BaseModel):
     amount: int | None = None
     key: str | None = None
     wait_settle: bool = True
+    action_detail: str | None = None
 
 
 class ActResponse(BaseModel):
@@ -219,6 +275,9 @@ class SessionEventType(str, Enum):
     TYPE = "type"
     ACT_ELEMENT = "act_element"
     BROWSER_SCREENSHOT = "browser_screenshot"
+    PLAN_REGISTERED = "plan_registered"
+    MILESTONE_STARTED = "milestone_started"
+    MILESTONE_COMPLETED = "milestone_completed"
 
 
 class SessionEventModel(BaseModel):

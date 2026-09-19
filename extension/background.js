@@ -74,8 +74,33 @@ function loadAuthorizedSessions() {
     });
 }
 
-// Hydrate authorizations on service worker wake
+// Spec 32: Strategic execution milestones and plan tracking per session
+const sessionPlans = new Map(); // sessionTitle -> { milestones: [], active_index: 1, current_action: null, progress_percent: 0 }
+
+function saveSessionPlans() {
+    try {
+        const entries = Array.from(sessionPlans.entries());
+        chrome.storage.local.set({ session_plans_data: entries });
+    } catch (e) {
+        console.warn("[Hub] Failed to persist sessionPlans:", e);
+    }
+}
+
+function loadSessionPlans() {
+    return new Promise((resolve) => {
+        chrome.storage.local.get(["session_plans_data"], (data) => {
+            if (data.session_plans_data && Array.isArray(data.session_plans_data)) {
+                data.session_plans_data.forEach(([k, v]) => sessionPlans.set(k, v));
+                console.log(`[Hub] Hydrated ${sessionPlans.size} session plans from storage (Spec 32).`);
+            }
+            resolve();
+        });
+    });
+}
+
+// Hydrate authorizations and plans on service worker wake
 loadAuthorizedSessions();
+loadSessionPlans();
 
 // Active evaluations tracking: tabId -> Set of reject callbacks
 const activeEvaluations = new Map();
@@ -155,6 +180,10 @@ class ResilientSocket {
                     this.onStateSync(this.server, data);
                 } else if (data.type === MT.UPDATE_PROGRESS) {
                     await forwardProgressToTabs(data);
+                } else if (data.type === MT.SET_PLAN || data.type === "set_plan") {
+                    await handleSetPlan(data);
+                } else if (data.type === MT.SET_MILESTONE || data.type === "set_milestone") {
+                    await handleSetMilestone(data);
                 }
             } catch (err) {
                 console.error(`[Hub] Error processing message from ${this.server.name}:`, err);
@@ -236,6 +265,7 @@ chrome.storage.local.get(["human_in_control", "agent_servers"], (data) => {
     humanInControl = !!data.human_in_control;
     loadAuthorizedSessions();
     loadActiveSessions();
+    loadSessionPlans();
 
     if (!data.agent_servers) {
         chrome.storage.local.set({ agent_servers: DEFAULT_SERVERS }, () => {
@@ -564,6 +594,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return true;
         }
 
+        case "get_auth_plan": {
+            const reqTitle = message.session_title || "";
+            const plan = sessionPlans.get(reqTitle) || sessionPlans.get(reqTitle.replace(/^✅\s*/, '')) || null;
+            sendResponse({ status: "success", plan });
+            return true;
+        }
+
         case MT.SCAN_LOCAL_AGENTS:
             scanLocalPorts().then(count => {
                 sendResponse({ discoveredCount: count });
@@ -619,8 +656,15 @@ async function ensureAuthorized(sessionTitle, server) {
         requireInteraction: true
     });
 
-    // 2. Open auth.html in a focused active tab and focus window (Spec 22: with token & session)
-    const authUrl = chrome.runtime.getURL(`auth.html?session=${encodeURIComponent(title)}&token=${encodeURIComponent(serverToken)}`);
+    // 2. Open auth.html in a focused active tab and focus window (Spec 22 & Spec 32: with token, session, and plan)
+    let planQuery = "";
+    const existingPlan = sessionPlans.get(title) || sessionPlans.get(title.replace(/^✅\s*/, ''));
+    if (existingPlan && existingPlan.milestones && existingPlan.milestones.length > 0) {
+        try {
+            planQuery = `&plan=${encodeURIComponent(JSON.stringify(existingPlan.milestones))}`;
+        } catch (e) {}
+    }
+    const authUrl = chrome.runtime.getURL(`auth.html?session=${encodeURIComponent(title)}&token=${encodeURIComponent(serverToken)}${planQuery}`);
     chrome.tabs.create({ url: authUrl, active: true }, (tab) => {
         if (tab && tab.windowId) {
             chrome.windows.update(tab.windowId, { focused: true });
@@ -650,14 +694,18 @@ chrome.notifications.onClicked.addListener((notifId) => {
 async function sendGlowToTab(tabId, sessionTitle, groupColor) {
     if (humanInControl) return;
     const sess = activeSessions.get(sessionTitle);
+    const existingPlan = sessionPlans.get(sessionTitle) || sessionPlans.get((sessionTitle || "").replace(/^✅\s*/, ''));
     const msg = {
         type: MT.SHOW_GLOW,
         session_title: sessionTitle || "AgentSocket Task",
         group_color: groupColor || "purple",
-        progress_percent: sess ? sess.progress_percent : undefined,
+        progress_percent: sess ? sess.progress_percent : (existingPlan ? existingPlan.progress_percent : undefined),
         step_current: sess ? sess.step_current : undefined,
         step_total: sess ? sess.step_total : undefined,
-        step_title: sess ? sess.step_title : undefined
+        step_title: sess ? sess.step_title : undefined,
+        milestones: existingPlan ? existingPlan.milestones : undefined,
+        active_milestone_index: existingPlan ? existingPlan.active_index : undefined,
+        current_action: existingPlan ? existingPlan.current_action : undefined
     };
     try {
         await chrome.tabs.sendMessage(tabId, msg);
@@ -1010,6 +1058,92 @@ async function forwardProgressToTabs(data) {
         }
     } catch (e) {
         console.warn("[Hub] Error forwarding progress:", e);
+    }
+}
+
+// Spec 32: Forward strategic plan and milestones to HUD in active session tabs
+async function handleSetPlan(data) {
+    const sessionTitle = data.session_title;
+    if (!sessionTitle) return;
+    const cleanTitle = sessionTitle.replace(/^✅\s*/, '');
+    const planObj = {
+        session_title: sessionTitle,
+        milestones: data.milestones || [],
+        active_index: data.active_index || 1,
+        progress_percent: data.progress_percent || 0,
+        current_action: data.current_action || null
+    };
+    sessionPlans.set(sessionTitle, planObj);
+    sessionPlans.set(cleanTitle, planObj);
+    saveSessionPlans();
+
+    await broadcastToSessionTabs(sessionTitle, {
+        type: MT.SET_PLAN || "set_plan",
+        session_title: sessionTitle,
+        milestones: planObj.milestones,
+        active_index: planObj.active_index,
+        progress_percent: planObj.progress_percent,
+        current_action: planObj.current_action
+    });
+}
+
+async function handleSetMilestone(data) {
+    const sessionTitle = data.session_title;
+    if (!sessionTitle) return;
+    const cleanTitle = sessionTitle.replace(/^✅\s*/, '');
+    let plan = sessionPlans.get(sessionTitle) || sessionPlans.get(cleanTitle) || {
+        session_title: sessionTitle,
+        milestones: [],
+        active_index: data.milestone_index || 1,
+        progress_percent: data.progress_percent || 0,
+        current_action: data.current_action || null
+    };
+    if (data.milestone_index !== undefined) plan.active_index = data.milestone_index;
+    if (data.progress_percent !== undefined) plan.progress_percent = data.progress_percent;
+    if (data.current_action !== undefined) plan.current_action = data.current_action;
+    sessionPlans.set(sessionTitle, plan);
+    sessionPlans.set(cleanTitle, plan);
+    saveSessionPlans();
+
+    await broadcastToSessionTabs(sessionTitle, {
+        type: MT.SET_MILESTONE || "set_milestone",
+        session_title: sessionTitle,
+        milestone_index: data.milestone_index,
+        milestone_title: data.milestone_title,
+        current_action: data.current_action,
+        progress_percent: data.progress_percent
+    });
+}
+
+async function broadcastToSessionTabs(sessionTitle, msg) {
+    try {
+        const cleanTitle = sessionTitle ? sessionTitle.replace(/^✅\s*/, '') : null;
+        let targetTabs = [];
+        if (sessionTitle) {
+            let groups = await chrome.tabGroups.query({ title: sessionTitle });
+            if (!groups || groups.length === 0) {
+                if (cleanTitle) {
+                    groups = await chrome.tabGroups.query({ title: cleanTitle });
+                    if (!groups || groups.length === 0) {
+                        groups = await chrome.tabGroups.query({ title: `✅ ${cleanTitle}` });
+                    }
+                }
+            }
+            if (groups && groups.length > 0) {
+                for (const g of groups) {
+                    const tabsInGroup = await chrome.tabs.query({ groupId: g.id });
+                    targetTabs.push(...tabsInGroup);
+                }
+            }
+        }
+        if (targetTabs.length === 0) {
+            targetTabs = await chrome.tabs.query({ active: true, currentWindow: true });
+        }
+        for (const tab of targetTabs) {
+            chrome.tabs.sendMessage(tab.id, msg).catch(() => {});
+        }
+    } catch (e) {
+        console.warn("[Hub] broadcastToSessionTabs error:", e);
     }
 }
 

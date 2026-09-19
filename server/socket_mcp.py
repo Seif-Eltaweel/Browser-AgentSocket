@@ -21,6 +21,55 @@ server = MCPServer("browser-socket")
 
 
 # ============================================================================
+# Strategic Plan & Milestones MCP Tools (Spec 32)
+# ============================================================================
+
+@server.tool()
+def session_set_plan(
+    session_title: str,
+    milestones: list[str],
+    active_index: int = 1,
+) -> dict[str, Any]:
+    """
+    Registers strategic execution milestones for a session, updating input/plan.json,
+    input/implementation_plan.md, and the browser HUD action tracker.
+    """
+    try:
+        return socket_launcher.session_set_plan(
+            session_title=session_title,
+            milestones=milestones,
+            active_index=active_index,
+        )
+    except Exception as e:
+        logger.error(f"MCP session_set_plan error: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@server.tool()
+def session_update_milestone(
+    session_title: str,
+    milestone_index: int | None = None,
+    milestone_title: str | None = None,
+    action_detail: str | None = None,
+    status: str | None = None,
+) -> dict[str, Any]:
+    """
+    Updates active milestone state or broadcasts a live micro-action ticker detail to the browser HUD.
+    """
+    try:
+        return socket_launcher.session_update_milestone(
+            session_title=session_title,
+            milestone_index=milestone_index,
+            milestone_title=milestone_title,
+            action_detail=action_detail,
+            status=status,
+        )
+    except Exception as e:
+        logger.error(f"MCP session_update_milestone error: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+# ============================================================================
 # Atomic Operator MCP Tools (Spec 24)
 # ============================================================================
 
@@ -28,14 +77,19 @@ server = MCPServer("browser-socket")
 def browser_observe(
     tab_group_id: int | None = None,
     take_screenshot: bool = False,
+    action_detail: str | None = None,
 ) -> dict[str, Any]:
     """
     Captures ARIA tree, assigns ephemeral numeric badges [1]..[N], and returns structured DOM snapshot.
     """
     try:
+        kwargs = {}
+        if action_detail is not None:
+            kwargs["action_detail"] = action_detail
         return socket_launcher.browser_observe(
             tab_group_id=tab_group_id,
             take_screenshot=take_screenshot,
+            **kwargs,
         )
     except Exception as e:
         logger.error(f"MCP browser_observe error: {e}")
@@ -47,15 +101,20 @@ def browser_click(
     element_id: int,
     tab_group_id: int | None = None,
     wait_settle: bool = True,
+    action_detail: str | None = None,
 ) -> dict[str, Any]:
     """
     Dispatches native focus, mouse/pointer events on the element and awaits adaptive settlement.
     """
     try:
+        kwargs = {}
+        if action_detail is not None:
+            kwargs["action_detail"] = action_detail
         return socket_launcher.browser_click(
             element_id=element_id,
             tab_group_id=tab_group_id,
             wait_settle=wait_settle,
+            **kwargs,
         )
     except Exception as e:
         logger.error(f"MCP browser_click error: {e}")
@@ -69,17 +128,22 @@ def browser_type(
     tab_group_id: int | None = None,
     clear_first: bool = False,
     press_enter: bool = False,
+    action_detail: str | None = None,
 ) -> dict[str, Any]:
     """
     Sets element value via prototype setter, dispatches change events, and settles.
     """
     try:
+        kwargs = {}
+        if action_detail is not None:
+            kwargs["action_detail"] = action_detail
         return socket_launcher.browser_type(
             element_id=element_id,
             text=text,
             tab_group_id=tab_group_id,
             clear_first=clear_first,
             press_enter=press_enter,
+            **kwargs,
         )
     except Exception as e:
         logger.error(f"MCP browser_type error: {e}")
@@ -91,15 +155,20 @@ def browser_scroll(
     direction: str,
     amount: int | None = None,
     tab_group_id: int | None = None,
+    action_detail: str | None = None,
 ) -> dict[str, Any]:
     """
     Scrolls viewport ("down", "up", "top", "bottom").
     """
     try:
+        kwargs = {}
+        if action_detail is not None:
+            kwargs["action_detail"] = action_detail
         return socket_launcher.browser_scroll(
             direction=direction,
             amount=amount,
             tab_group_id=tab_group_id,
+            **kwargs,
         )
     except Exception as e:
         logger.error(f"MCP browser_scroll error: {e}")
@@ -302,7 +371,7 @@ def socket_get_session_artifact(session_path: str, artifact_name: str) -> dict[s
 def socket_get_session_document(session_path: str) -> str:
     """
     Retrieves or generates the comprehensive consolidated Markdown document (SESSION_DOCUMENT.md / README.md)
-    for a given session, including executive overview, playbook summary, inventories of input/output/adhocs/artifacts,
+    for a given session, including executive overview, playbook summary, inventories of input/output/artifacts,
     and the chronological execution timeline thread.
     """
     try:
@@ -328,8 +397,7 @@ def socket_list_subskills(query_hint: str = "", tags: str = "") -> list[dict[str
 @server.tool()
 def socket_get_subskill(name: str) -> dict[str, Any]:
     """
-    Step 2 (Subskills): Retrieves detailed subskill metadata, full playbook contract (sub_skill.md with tested DOM selectors and rules),
-    and available adhoc scripts.
+    Step 2 (Subskills): Retrieves detailed subskill metadata and full playbook contract (sub_skill.md with tested DOM selectors and rules).
     """
     try:
         res = socket_launcher.get_subskill(name=name)
@@ -348,7 +416,7 @@ def socket_borrow_subskill(
     input_file_path: str | None = None,
 ) -> dict[str, Any]:
     """
-    Step 3 (Subskills): Clones a subskill's playbook (sub_skill.md) and adhoc tools (adhocs/) into the active
+    Step 3 (Subskills): Clones a subskill's playbook (sub_skill.md) into the active
     session workspace, optionally copying input data into input/ folder, incrementing the borrow count, and logging
     a subskill_borrowed event.
     """
@@ -367,21 +435,20 @@ def socket_borrow_subskill(
 def socket_register_subskill(
     session_path: str,
     name: str,
-    display_title: str | None = None,
-    description: str | None = None,
-    tags: str | None = None,
+    title: str,
+    description: str,
+    tags: str = "",
     adhoc_tools: list[str] | None = None,
 ) -> dict[str, Any]:
     """
-    Step 4 (Subskills): Packages and registers a completed or refined session as a permanent reusable subskill
-    into the master central vault (server/subskills/).
+    Step 4 (Subskills): Registers or updates a completed session as a reusable subskill in the central registry.
     """
     try:
         tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else None
         return socket_launcher.register_subskill(
             session_path=session_path,
             name=name,
-            display_title=display_title,
+            display_title=title,
             description=description,
             tags=tag_list,
             adhoc_tools=adhoc_tools,
@@ -390,54 +457,6 @@ def socket_register_subskill(
         logger.error(f"MCP socket_register_subskill error: {e}")
         return {"status": "error", "message": str(e)}
 
-
-@server.tool()
-def socket_promote_adhoc(
-    session_path: str = "",
-    tool_name: str = "",
-    target_vault: str = "universal",
-    subskill_name: str | None = None,
-) -> dict[str, Any]:
-    """
-    [DEPRECATED] Adhoc script promotion is deprecated on this branch.
-    Subskills are Markdown SOP playbooks, not Python scripts.
-    """
-    return {
-        "status": "error",
-        "deprecated": True,
-        "message": (
-            "socket_promote_adhoc is deprecated on this branch. "
-            "Subskills are now Markdown SOP playbooks (sub_skill.md), not executable Python scripts."
-        ),
-    }
-
-
-@server.tool()
-def socket_list_adhocs() -> list[dict[str, Any]]:
-    """
-    [DEPRECATED] Lists adhoc tools. Legacy Python adhocs are deprecated in favor of atomic operator tools.
-    """
-    return []
-
-
-@server.tool()
-def socket_run_adhoc(
-    tool_name: str,
-    session_path: str | None = None,
-    args: list[str] | None = None,
-) -> dict[str, Any]:
-    """
-    [DEPRECATED] Adhoc script execution is deprecated on this branch.
-    Use atomic operator tools (browser_observe, browser_click, browser_type, browser_scroll, browser_key_press) instead.
-    """
-    return {
-        "status": "warning",
-        "deprecated": True,
-        "message": (
-            f"socket_run_adhoc is deprecated on this branch. Please use atomic operator tools instead: "
-            "browser_observe, browser_click, browser_type, browser_scroll, browser_key_press."
-        ),
-    }
 
 
 def main() -> None:

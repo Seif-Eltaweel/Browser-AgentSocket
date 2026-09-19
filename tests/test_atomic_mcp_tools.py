@@ -98,25 +98,12 @@ class TestAtomicMCPTools(unittest.TestCase):
         self.assertIn("total_phases", ms_props)
         self.assertIn("tab_group_id", ms_props)
 
-    def test_legacy_adhoc_tools_deprecated(self):
-        """Verifies that legacy script execution tools return proper deprecation notices."""
-        # socket_run_adhoc
-        res_run = socket_mcp.socket_run_adhoc("test_tool.py")
-        self.assertEqual(res_run["status"], "warning")
-        self.assertTrue(res_run["deprecated"])
-        self.assertIn("deprecated", res_run["message"])
-        self.assertIn("browser_observe", res_run["message"])
-
-        # socket_promote_adhoc
-        res_promote = socket_mcp.socket_promote_adhoc("dummy/path", "test_tool.py")
-        self.assertEqual(res_promote["status"], "error")
-        self.assertTrue(res_promote["deprecated"])
-        self.assertIn("deprecated", res_promote["message"])
-        self.assertIn("Markdown SOP", res_promote["message"])
-
-        # socket_list_adhocs
-        res_list = socket_mcp.socket_list_adhocs()
-        self.assertEqual(res_list, [])
+    def test_legacy_adhoc_tools_purged_from_mcp(self):
+        """Spec 33: Verifies that adhoc script execution tools are completely removed from MCP registration."""
+        tool_names = [t.name for t in asyncio.run(socket_mcp.server.list_tools())]
+        self.assertNotIn("socket_run_adhoc", tool_names)
+        self.assertNotIn("socket_promote_adhoc", tool_names)
+        self.assertNotIn("socket_list_adhocs", tool_names)
 
     def test_gateway_screenshot_vision_disabled(self):
         """Verifies that /screenshot returns denied when vision permission is disabled."""

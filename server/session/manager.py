@@ -32,6 +32,10 @@ from server.models import (
     BorrowedSubskillReference,
     PromoteAdhocPayload,
     RunAdhocPayload,
+    MilestoneStatus,
+    PlanMilestone,
+    PlanPayload,
+    UpdateMilestonePayload,
 )
 from server.session.documenter import SessionDocumenter
 from server.session.formatter import (
@@ -146,6 +150,67 @@ class ActiveSession:
     artifacts_count: int = 0
     end_reason: str | None = None
     human_takeover_start_time: float | None = None
+    milestones: list[PlanMilestone] = field(default_factory=list)
+    active_milestone_index: int | None = None
+    current_action: str | None = None
+
+
+def render_milestones_markdown(
+    session_title: str,
+    milestones: list[PlanMilestone],
+    active_index: int | None = None,
+    current_action: str | None = None,
+) -> str:
+    """Renders clean, executive strategic milestones checklist (Spec 32)."""
+    total = len(milestones)
+    completed = sum(1 for m in milestones if m.status in (MilestoneStatus.COMPLETED, "completed"))
+    percent = int((completed / total) * 100) if total > 0 else 0
+
+    filled_blocks = int(round((percent / 100) * 10))
+    empty_blocks = 10 - filled_blocks
+    bar = "█" * filled_blocks + "░" * empty_blocks
+
+    active_str = "None (Idle)"
+    if active_index and 1 <= active_index <= total:
+        active_m = milestones[active_index - 1]
+        active_str = f"Milestone {active_m.index}: {active_m.title}"
+    elif completed == total and total > 0:
+        active_str = "✅ All Strategic Milestones Completed (100%)"
+
+    action_str = current_action or "None (Idle)"
+
+    lines = [
+        f"# 🎯 Strategic Plan: {session_title}",
+        "",
+        "## 📊 Milestone Progress",
+        f"*Progress: [{bar}] {completed}/{total} Milestones Completed ({percent}%)*",
+        f"*Active Milestone:* `{active_str}`",
+        f"*Live Micro-Action:* `{action_str}`",
+        "",
+        "---",
+        "",
+        "## 🏁 Strategic Milestones Checklist",
+    ]
+
+    for m in milestones:
+        status_val = m.status.value if hasattr(m.status, "value") else str(m.status)
+        if status_val == "completed":
+            check_char = "x"
+            suffix = f" — COMPLETED ({m.description})" if m.description else " — COMPLETED"
+        elif status_val == "in_progress":
+            check_char = "/"
+            suffix = f" — IN PROGRESS ({m.description})" if m.description else " — IN PROGRESS"
+        elif status_val == "failed":
+            check_char = "x"
+            suffix = f" — FAILED ({m.description})" if m.description else " — FAILED"
+        else:
+            check_char = " "
+            suffix = f" — {m.description}" if m.description else ""
+
+        lines.append(f"- [{check_char}] **Milestone {m.index}:** {m.title}{suffix}")
+
+    lines.append("")
+    return "\n".join(lines)
 
 
 @dataclass
@@ -672,6 +737,221 @@ class SessionManager:
             if session.tab_group_name == session_title or session_title in session.session_title:
                 return session
         return None
+
+    # ========================================================================
+    # Strategic Milestones & Plan Persistence (Spec 32)
+    # ========================================================================
+    def _save_milestones_artifacts(self, session: ActiveSession) -> None:
+        """Persists input/plan.json and input/implementation_plan.md for strategic milestones (Spec 32)."""
+        input_dir = session.input_dir or os.path.join(session.session_dir, "input")
+        os.makedirs(input_dir, exist_ok=True)
+
+        total = len(session.milestones)
+        completed = sum(1 for m in session.milestones if m.status in (MilestoneStatus.COMPLETED, "completed"))
+        percent = int((completed / total) * 100) if total > 0 else 0
+
+        plan_json_path = os.path.join(input_dir, "plan.json")
+        plan_dict = {
+            "session_title": session.session_title,
+            "total_milestones": total,
+            "completed_milestones": completed,
+            "progress_percent": percent,
+            "active_milestone_index": session.active_milestone_index,
+            "current_action": session.current_action,
+            "milestones": [
+                {
+                    "index": m.index,
+                    "title": m.title,
+                    "description": m.description,
+                    "status": m.status.value if hasattr(m.status, "value") else str(m.status),
+                }
+                for m in session.milestones
+            ],
+        }
+        try:
+            with open(plan_json_path, "w", encoding="utf-8") as f:
+                json.dump(plan_dict, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logger.warning(f"Could not save plan.json: {e}")
+
+        plan_md_path = os.path.join(input_dir, "implementation_plan.md")
+        try:
+            with open(plan_md_path, "w", encoding="utf-8") as f:
+                f.write(render_milestones_markdown(
+                    session_title=session.session_title,
+                    milestones=session.milestones,
+                    active_index=session.active_milestone_index,
+                    current_action=session.current_action,
+                ))
+        except Exception as e:
+            logger.warning(f"Could not save implementation_plan.md: {e}")
+
+    def set_session_plan(
+        self,
+        session_title: str,
+        milestones: list[PlanMilestone | dict[str, Any] | str],
+        active_index: int = 1,
+        tab_group_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Registers or updates strategic milestones for an active session (Spec 32)."""
+        session = None
+        if tab_group_id is not None:
+            session = self.get_active_session_by_group_id(tab_group_id)
+        if not session and session_title:
+            session = self.get_active_session_by_title(session_title)
+        if not session:
+            gid = tab_group_id if tab_group_id is not None else 0
+            session = self.get_or_create_session(tab_group_id=gid, tab_group_name=session_title)
+
+        parsed_milestones: list[PlanMilestone] = []
+        for idx, item in enumerate(milestones, start=1):
+            if isinstance(item, PlanMilestone):
+                parsed_milestones.append(item)
+            elif isinstance(item, dict):
+                m_idx = item.get("index", idx)
+                m_title = item.get("title", f"Milestone {m_idx}")
+                m_desc = item.get("description")
+                m_status = item.get("status", MilestoneStatus.PENDING)
+                if isinstance(m_status, str):
+                    try:
+                        m_status = MilestoneStatus(m_status)
+                    except ValueError:
+                        m_status = MilestoneStatus.PENDING
+                parsed_milestones.append(PlanMilestone(index=m_idx, title=m_title, description=m_desc, status=m_status))
+            elif isinstance(item, str):
+                parsed_milestones.append(PlanMilestone(index=idx, title=item, status=MilestoneStatus.PENDING))
+
+        if 1 <= active_index <= len(parsed_milestones):
+            parsed_milestones[active_index - 1].status = MilestoneStatus.IN_PROGRESS
+
+        session.milestones = parsed_milestones
+        session.active_milestone_index = active_index
+
+        self._save_milestones_artifacts(session)
+
+        now = time.time()
+        self.log_event(
+            tab_group_id=session.tab_group_id,
+            event_type=SessionEventType.PLAN_REGISTERED,
+            title=f"Plan Registered: {len(parsed_milestones)} Strategic Milestones",
+            start_time=now,
+            end_time=now,
+            tab_group_id_val=session.tab_group_id,
+            payload={
+                "session_title": session_title,
+                "total_milestones": len(parsed_milestones),
+                "active_index": active_index,
+                "milestones": [
+                    {
+                        "index": m.index,
+                        "title": m.title,
+                        "description": m.description,
+                        "status": m.status.value if hasattr(m.status, "value") else str(m.status),
+                    }
+                    for m in parsed_milestones
+                ],
+            },
+        )
+
+        total = len(parsed_milestones)
+        completed = sum(1 for m in parsed_milestones if m.status in (MilestoneStatus.COMPLETED, "completed"))
+        percent = int((completed / total) * 100) if total > 0 else 0
+        active_title = parsed_milestones[active_index - 1].title if 1 <= active_index <= total else ""
+
+        return {
+            "status": "success",
+            "session_title": session_title,
+            "total_milestones": total,
+            "active_index": active_index,
+            "active_title": active_title,
+            "progress_percent": percent,
+            "milestones": [
+                {
+                    "index": m.index,
+                    "title": m.title,
+                    "description": m.description,
+                    "status": m.status.value if hasattr(m.status, "value") else str(m.status),
+                }
+                for m in parsed_milestones
+            ],
+        }
+
+    def update_session_milestone(
+        self,
+        session_title: str,
+        milestone_index: int | None = None,
+        milestone_title: str | None = None,
+        action_detail: str | None = None,
+        status: MilestoneStatus | str | None = None,
+        tab_group_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Updates active milestone state or atomic action detail for a session (Spec 32)."""
+        session = None
+        if tab_group_id is not None:
+            session = self.get_active_session_by_group_id(tab_group_id)
+        if not session and session_title:
+            session = self.get_active_session_by_title(session_title)
+        if not session:
+            gid = tab_group_id if tab_group_id is not None else 0
+            session = self.get_or_create_session(tab_group_id=gid, tab_group_name=session_title)
+
+        now = time.time()
+        idx = milestone_index if milestone_index is not None else session.active_milestone_index
+        if idx is not None and 1 <= idx <= len(session.milestones):
+            target_m = session.milestones[idx - 1]
+            if milestone_title:
+                target_m.title = milestone_title
+            if status:
+                status_val = status if isinstance(status, MilestoneStatus) else MilestoneStatus(str(status))
+                prev_status = target_m.status
+                target_m.status = status_val
+
+                if status_val == MilestoneStatus.IN_PROGRESS and prev_status != MilestoneStatus.IN_PROGRESS:
+                    self.log_event(
+                        tab_group_id=session.tab_group_id,
+                        event_type=SessionEventType.MILESTONE_STARTED,
+                        title=f"Milestone Started: [{target_m.index}/{len(session.milestones)}] {target_m.title}",
+                        start_time=now,
+                        end_time=now,
+                        tab_group_id_val=session.tab_group_id,
+                        payload={"milestone_index": target_m.index, "title": target_m.title},
+                    )
+                elif status_val == MilestoneStatus.COMPLETED and prev_status != MilestoneStatus.COMPLETED:
+                    self.log_event(
+                        tab_group_id=session.tab_group_id,
+                        event_type=SessionEventType.MILESTONE_COMPLETED,
+                        title=f"Milestone Completed: [{target_m.index}/{len(session.milestones)}] {target_m.title}",
+                        start_time=now,
+                        end_time=now,
+                        tab_group_id_val=session.tab_group_id,
+                        payload={"milestone_index": target_m.index, "title": target_m.title},
+                    )
+            session.active_milestone_index = idx
+
+        if action_detail is not None:
+            session.current_action = action_detail
+
+        self._save_milestones_artifacts(session)
+
+        total = len(session.milestones)
+        completed = sum(1 for m in session.milestones if m.status in (MilestoneStatus.COMPLETED, "completed"))
+        percent = int((completed / total) * 100) if total > 0 else 0
+
+        active_title = ""
+        cur_idx = session.active_milestone_index or (milestone_index or 1)
+        if 1 <= cur_idx <= total:
+            active_title = session.milestones[cur_idx - 1].title
+
+        return {
+            "status": "success",
+            "session_title": session.session_title,
+            "milestone_index": cur_idx,
+            "milestone_title": active_title,
+            "current_action": session.current_action,
+            "progress_percent": percent,
+            "total_milestones": total,
+            "completed_milestones": completed,
+        }
 
     # ========================================================================
     # Event Logging & Threshold Offloading

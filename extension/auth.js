@@ -32,6 +32,68 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
+    // Spec 32: Render planned strategic execution milestones
+    const milestonesList = document.getElementById("milestonesList");
+    function renderMilestones(milestones) {
+        if (!milestonesList) return;
+        milestonesList.innerHTML = "";
+        if (milestones && Array.isArray(milestones) && milestones.length > 0) {
+            milestones.forEach((m, idx) => {
+                const item = document.createElement("div");
+                item.className = "milestone-item";
+
+                const badge = document.createElement("span");
+                badge.className = "milestone-badge";
+                const num = m.index !== undefined ? m.index : (idx + 1);
+                badge.textContent = `Milestone ${num}:`;
+
+                const text = document.createElement("span");
+                text.className = "milestone-text";
+                text.textContent = typeof m === "string" ? m : (m.title || `Milestone ${num}`);
+
+                item.appendChild(badge);
+                item.appendChild(text);
+                milestonesList.appendChild(item);
+            });
+        } else {
+            milestonesList.innerHTML = `
+                <div class="milestone-fallback">
+                    <span class="fallback-icon">◆</span>
+                    <span>Autonomous Milestone Discovery: Agent will adaptively establish milestones during execution.</span>
+                </div>
+            `;
+        }
+    }
+
+    // Try parsing from query param first
+    let initialMilestones = null;
+    const planParam = urlParams.get("plan");
+    if (planParam) {
+        try {
+            initialMilestones = JSON.parse(planParam);
+        } catch (e) {
+            console.warn("Failed to parse plan parameter:", e);
+        }
+    }
+
+    if (initialMilestones && initialMilestones.length > 0) {
+        renderMilestones(initialMilestones);
+    } else {
+        renderMilestones(null);
+        try {
+            if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
+                chrome.runtime.sendMessage({
+                    type: "get_auth_plan",
+                    session_title: sessionTitle
+                }, (res) => {
+                    if (res && res.plan && res.plan.milestones && res.plan.milestones.length > 0) {
+                        renderMilestones(res.plan.milestones);
+                    }
+                });
+            }
+        } catch (e) {}
+    }
+
     const msgType = (typeof MessageTypes !== "undefined" && MessageTypes.AUTH_STATUS_CHANGED) ? MessageTypes.AUTH_STATUS_CHANGED : "auth_status_changed";
 
     grantBtn.addEventListener("click", () => {
