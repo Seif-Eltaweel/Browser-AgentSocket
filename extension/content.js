@@ -19,11 +19,16 @@ let isShieldActive = false;
 let isTakeoverActive = false;
 let tooltipTimeout = null;
 
-// Spec 21: Live Intent & Action Ticker State
-let currentIntent = "Searching rentals in Cairo...";
-let currentActionSubtext = "Initializing OODA observer...";
+// Spec 34: Live Intent, Action Ticker & ARIA Badging Lifecycle State
+let currentIntent = "Initializing session...";
+let currentActionSubtext = "(Waiting for agent action...)";
 let currentPhaseBadge = "";
 let isHudMinimized = false;
+let isVisionEnabled = false; // Synchronized from background permissions
+let badgeScrollListenerAttached = false;
+let activeBadgeElements = []; // Cached element references for scroll repositioning
+let repositionRaf = null;
+let badgeFadeTimeout = null;
 
 // Spec 32: Strategic Milestones & HUD Progress State
 let currentMilestones = [];
@@ -132,6 +137,9 @@ function checkInitialSessionState() {
                 if (response.active_milestone_index !== undefined) {
                     activeMilestoneIndex = response.active_milestone_index;
                 }
+                if (response.enable_vision !== undefined) {
+                    isVisionEnabled = !!response.enable_vision;
+                }
                 if (response.current_action) {
                     currentActionSubtext = response.current_action;
                 }
@@ -168,6 +176,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         case "show_glow":
             currentSessionTitle = message.session_title || "AgentSocket Task";
             currentGroupColor = message.group_color || "purple";
+            if (message.enable_vision !== undefined) {
+                isVisionEnabled = !!message.enable_vision;
+            }
             if (message.milestones && Array.isArray(message.milestones)) {
                 currentMilestones = message.milestones;
             }
@@ -238,9 +249,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             sendResponse({ status: "success" });
             break;
 
+        case "clear_badges":
+            removeBadges();
+            sendResponse({ status: "success" });
+            break;
+
         case "observe_page":
         case "OBSERVE_PAGE":
+            if (message.options && message.options.enable_vision !== undefined) {
+                isVisionEnabled = !!message.options.enable_vision;
+            }
+            currentActionSubtext = "↳ Action: Scanning ARIA tree & indexing elements...";
+            updateHudTicker();
+
             const obsResult = observePage(message.options || {});
+            const elCount = (obsResult && obsResult.elements) ? obsResult.elements.length : 0;
+            currentActionSubtext = `↳ State: Indexed ${elCount} interactive elements`;
+            updateHudTicker();
+
             sendResponse(obsResult);
             break;
 
@@ -273,8 +299,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             if (message.progress_percent !== undefined) {
                 currentProgress.percent = message.progress_percent;
             }
+            if (message.enable_vision !== undefined) {
+                isVisionEnabled = !!message.enable_vision;
+            }
+            // Spec 34: Sync top intent line to active milestone
+            const activeM = currentMilestones.find(m => (m.index || m.phase_number) === activeMilestoneIndex) || currentMilestones[0];
+            if (activeM) {
+                const total = currentMilestones.length;
+                currentIntent = `Milestone [${activeMilestoneIndex}/${total}]: ${activeM.title || activeM.name}`;
+            }
             if (message.current_action) {
                 currentActionSubtext = message.current_action;
+            } else {
+                currentActionSubtext = "Plan initialized. Ready for execution.";
             }
             saveStoredProgress(currentProgress);
             updateHudTicker();
@@ -291,13 +328,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }
             if (message.milestone_title || message.title) {
                 currentMilestoneTitle = message.milestone_title || message.title;
-                currentIntent = currentMilestoneTitle;
                 if (currentMilestones && currentMilestones.length >= activeMilestoneIndex && activeMilestoneIndex > 0) {
                     const m = currentMilestones[activeMilestoneIndex - 1];
                     if (m && typeof m === "object") {
                         m.title = currentMilestoneTitle;
                     }
                 }
+            }
+            const totalM = currentMilestones ? currentMilestones.length : 0;
+            const activeTitle = currentMilestoneTitle || (currentMilestones && currentMilestones[activeMilestoneIndex - 1] ? (currentMilestones[activeMilestoneIndex - 1].title || currentMilestones[activeMilestoneIndex - 1].name) : "");
+            if (totalM > 0 && activeTitle) {
+                currentIntent = `Milestone [${activeMilestoneIndex}/${totalM}]: ${activeTitle}`;
+            } else if (activeTitle) {
+                currentIntent = activeTitle;
             }
             if (message.phase_number !== undefined && message.total_phases !== undefined) {
                 currentPhaseBadge = `[Phase ${message.phase_number}/${message.total_phases}]`;
@@ -311,6 +354,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }
             if (message.progress_percent !== undefined) {
                 currentProgress.percent = message.progress_percent;
+            }
+            saveStoredProgress(currentProgress);
+            updateHudTicker();
+            sendResponse({ status: "success" });
+            break;
+
+        case "task_complete":
+        case "TASK_COMPLETE":
+            currentIntent = "✅ Task Complete";
+            const resSummary = message.result || message.target_data || "Task completed successfully";
+            currentActionSubtext = `↳ Result: ${resSummary}`;
+            currentProgress.percent = 100;
+            isShieldActive = false;
+            removeBadges();
+            const compShadow = getOrCreateShadowRoot();
+            if (compShadow) {
+                const glowFrame = compShadow.getElementById ? compShadow.getElementById("ab-glow-frame") : compShadow.querySelector("#ab-glow-frame");
+                if (glowFrame) glowFrame.remove();
+                const shield = compShadow.getElementById ? compShadow.getElementById("ab-interaction-shield") : compShadow.querySelector("#ab-interaction-shield");
+                if (shield) shield.remove();
             }
             saveStoredProgress(currentProgress);
             updateHudTicker();
@@ -331,8 +394,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 if (typeof window !== "undefined") {
     window.__agentsocket_elements = window.__agentsocket_elements || new Map();
 }
-
-let badgeFadeTimeout = null;
 
 function isElementVisible(el) {
     if (!el || !el.isConnected) return false;
@@ -546,6 +607,11 @@ function traverseAriaTree(root) {
         if (typeof window !== "undefined" && window.__agentsocket_elements) {
             window.__agentsocket_elements.set(id, node);
         }
+        try {
+            if (node && node.dataset) {
+                node.dataset.agentsocketId = String(id);
+            }
+        } catch (e) {}
 
         const rect = node.getBoundingClientRect ? node.getBoundingClientRect() : { left: 0, top: 0, width: 0, height: 0 };
         const role = (node.getAttribute("role") || tag.toLowerCase()).toLowerCase();
@@ -591,48 +657,53 @@ function traverseAriaTree(root) {
 
 function removeBadges() {
     if (typeof document === "undefined") return;
+    if (badgeFadeTimeout) {
+        clearTimeout(badgeFadeTimeout);
+        badgeFadeTimeout = null;
+    }
     const shadow = getOrCreateShadowRoot();
     if (!shadow) return;
-    const container = shadow.getElementById("agentsocket-badges-container");
+    const container = shadow.getElementById ? shadow.getElementById("agentsocket-badges-container") : shadow.querySelector("#agentsocket-badges-container");
     if (container) {
+        container.id = "agentsocket-badges-container-fading";
         container.style.opacity = "0";
         setTimeout(() => {
             if (container.parentNode) container.remove();
         }, 200);
     }
+    activeBadgeElements = [];
 }
 
-function renderBadges(elements) {
-    if (typeof document === "undefined") return;
-    removeBadges();
-    const shadow = getOrCreateShadowRoot();
-    if (!shadow) return;
-
-    const container = document.createElement("div");
-    container.id = "agentsocket-badges-container";
-    container.style.cssText = `
-        position: fixed !important;
-        top: 0 !important;
-        left: 0 !important;
-        width: 100vw !important;
-        height: 100vh !important;
-        pointer-events: none !important;
-        z-index: 2147483645 !important;
-        transition: opacity 0.25s ease !important;
-        opacity: 1 !important;
-    `;
-
+function repositionBadges(container) {
+    if (!container || typeof document === "undefined") return;
+    container.innerHTML = "";
     const viewHeight = (typeof window !== "undefined" && window.innerHeight) ? window.innerHeight : 800;
+    const viewWidth = (typeof window !== "undefined" && window.innerWidth) ? window.innerWidth : 1280;
 
-    for (const elData of elements) {
-        const node = (typeof window !== "undefined" && window.__agentsocket_elements) 
+    for (const elData of activeBadgeElements) {
+        let node = (typeof window !== "undefined" && window.__agentsocket_elements) 
             ? window.__agentsocket_elements.get(elData.id) 
             : null;
+        const isConnected = (typeof document !== "undefined" && typeof document.contains === "function")
+            ? document.contains(node)
+            : (typeof document !== "undefined" && document.documentElement && typeof document.documentElement.contains === "function"
+                ? document.documentElement.contains(node)
+                : true);
+        if (!node || !isConnected) {
+            if (typeof document !== "undefined" && typeof document.querySelector === "function") {
+                try {
+                    node = document.querySelector(`[data-agentsocket-id="${elData.id}"]`);
+                    if (node && window.__agentsocket_elements) {
+                        window.__agentsocket_elements.set(elData.id, node);
+                    }
+                } catch (e) {}
+            }
+        }
         if (!node || !node.getBoundingClientRect) continue;
 
         const rect = node.getBoundingClientRect();
         if (rect.width <= 0 || rect.height <= 0) continue;
-        if (rect.bottom < 0 || rect.top > viewHeight) continue;
+        if (rect.bottom < 0 || rect.top > viewHeight || rect.right < 0 || rect.left > viewWidth) continue;
 
         const badge = document.createElement("div");
         badge.className = "agentsocket-badge-pill";
@@ -656,21 +727,81 @@ function renderBadges(elements) {
         `;
         container.appendChild(badge);
     }
+}
 
+function handleBadgeReposition() {
+    if (repositionRaf) return;
+    if (typeof requestAnimationFrame === "function") {
+        repositionRaf = requestAnimationFrame(() => {
+            repositionRaf = null;
+            const shadow = getOrCreateShadowRoot();
+            if (!shadow) return;
+            const container = shadow.getElementById ? shadow.getElementById("agentsocket-badges-container") : shadow.querySelector("#agentsocket-badges-container");
+            if (container) {
+                repositionBadges(container);
+            }
+        });
+    } else {
+        const shadow = getOrCreateShadowRoot();
+        if (!shadow) return;
+        const container = shadow.getElementById ? shadow.getElementById("agentsocket-badges-container") : shadow.querySelector("#agentsocket-badges-container");
+        if (container) {
+            repositionBadges(container);
+        }
+    }
+}
+
+function renderBadges(elements, options = {}) {
+    if (typeof document === "undefined") return;
+    removeBadges();
+    const shadow = getOrCreateShadowRoot();
+    if (!shadow) return;
+
+    activeBadgeElements = elements || [];
+
+    const container = document.createElement("div");
+    container.id = "agentsocket-badges-container";
+    container.style.cssText = `
+        position: fixed !important;
+        top: 0 !important;
+        left: 0 !important;
+        width: 100vw !important;
+        height: 100vh !important;
+        pointer-events: none !important;
+        z-index: 2147483645 !important;
+        transition: opacity 0.2s ease !important;
+        opacity: 1 !important;
+    `;
+
+    repositionBadges(container);
     shadow.appendChild(container);
 
-    if (badgeFadeTimeout) clearTimeout(badgeFadeTimeout);
-    badgeFadeTimeout = setTimeout(() => {
-        removeBadges();
-    }, 1500);
+    // Attach passive scroll and resize listeners with capture: true for nested scrollable containers
+    if (!badgeScrollListenerAttached && typeof window !== "undefined" && window.addEventListener) {
+        window.addEventListener("scroll", handleBadgeReposition, { passive: true, capture: true });
+        window.addEventListener("resize", handleBadgeReposition, { passive: true });
+        badgeScrollListenerAttached = true;
+    }
+
+    // Spec 34: Badges remain PERSISTENT for human inspection until explicit dismissal (Escape / clear / complete)
+    // Only auto-fade if explicitly requested via options.auto_fade === true
+    if (options.auto_fade === true) {
+        if (badgeFadeTimeout) clearTimeout(badgeFadeTimeout);
+        badgeFadeTimeout = setTimeout(() => {
+            removeBadges();
+        }, 1500);
+    }
 }
 
 function observePage(options = {}) {
+    if (options.enable_vision !== undefined) {
+        isVisionEnabled = !!options.enable_vision;
+    }
     const root = options.root || (typeof document !== "undefined" ? (document.body || document.documentElement) : null);
     const { elements, tree_text } = traverseAriaTree(root);
 
     if (options.show_badges !== false && typeof document !== "undefined") {
-        renderBadges(elements);
+        renderBadges(elements, options);
     }
 
     return {
@@ -991,16 +1122,24 @@ async function executeAtomicAction(payload = {}) {
 
     switch (action) {
         case "click":
+            currentActionSubtext = `↳ Action: Clicking element [${elementId}]...`;
+            updateHudTicker();
             actionResult = actClick(elementId, payload);
             break;
         case "type":
+            currentActionSubtext = `↳ Action: Typing into [${elementId}]...`;
+            updateHudTicker();
             actionResult = actType(elementId, payload.text, payload);
             break;
         case "scroll":
+            currentActionSubtext = `↳ Action: Scrolling ${payload.direction || "down"}...`;
+            updateHudTicker();
             actionResult = actScroll(payload.direction, payload.amount);
             break;
         case "key_press":
         case "keypress":
+            currentActionSubtext = `↳ Action: Pressing key "${payload.key}"...`;
+            updateHudTicker();
             actionResult = actKeyPress(payload.key);
             break;
         default:
@@ -1017,6 +1156,17 @@ async function executeAtomicAction(payload = {}) {
     if (waitSettle) {
         settlement = await waitForSettlement(payload.settlement_options || {});
     }
+
+    if (action === "click") {
+        currentActionSubtext = `↳ State: Clicked element [${elementId}]`;
+    } else if (action === "type") {
+        currentActionSubtext = `↳ State: Typed into [${elementId}]`;
+    } else if (action === "scroll") {
+        currentActionSubtext = `↳ State: Scrolled ${payload.direction || "down"}`;
+    } else if (action === "key_press" || action === "keypress") {
+        currentActionSubtext = `↳ State: Pressed key "${payload.key}"`;
+    }
+    updateHudTicker();
 
     const endTime = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
     const totalDurationMs = Math.round((endTime - startTime) * 10) / 10;
@@ -1113,8 +1263,12 @@ function getOrCreateShadowRoot() {
     }
     let shadow = host.shadowRoot;
     if (!shadow) {
-        shadow = host.attachShadow({ mode: "open" });
-        injectShadowStyles(shadow);
+        if (typeof host.attachShadow === "function") {
+            shadow = host.attachShadow({ mode: "open" });
+            injectShadowStyles(shadow);
+        } else {
+            shadow = host;
+        }
     }
     return shadow;
 }
@@ -1175,7 +1329,7 @@ function clearShadowContent(shadowRoot) {
     if (!shadowRoot) return;
     const children = Array.from(shadowRoot.childNodes);
     children.forEach(child => {
-        if (child.id !== "agentsocket-hud-styles") {
+        if (child.id !== "agentsocket-hud-styles" && child.id !== "agentsocket-badges-container") {
             shadowRoot.removeChild(child);
         }
     });
@@ -1184,6 +1338,7 @@ function clearShadowContent(shadowRoot) {
 function removeAllUI() {
     isShieldActive = false;
     isTakeoverActive = false;
+    removeBadges();
     const host = document.getElementById("agentsocket-hud-host");
     if (host && host.parentNode) {
         host.parentNode.removeChild(host);
@@ -1563,7 +1718,7 @@ function renderActiveGlow(sessionTitle, groupColor) {
 // Live Update Ticker Function (Zero Flickering, Spec 32)
 function updateHudTicker() {
     const shadow = getOrCreateShadowRoot();
-    if (!shadow) return;
+    if (!shadow || (typeof shadow.getElementById !== "function" && typeof shadow.querySelector !== "function")) return;
 
     const dot = shadow.getElementById ? shadow.getElementById("ab-status-dot") : shadow.querySelector("#ab-status-dot");
     const phase = shadow.getElementById ? shadow.getElementById("ab-phase-badge") : shadow.querySelector("#ab-phase-badge");
@@ -1738,6 +1893,7 @@ function setMilestone(title, phaseNumber, totalPhases) {
 function handleTakeover(notes) {
     isTakeoverActive = true;
     isShieldActive = false; // Lift lockout shield so user can interact
+    removeBadges(); // Spec 34: Clear badges on takeover
 
     const shadow = getOrCreateShadowRoot();
     if (shadow) {
@@ -1795,7 +1951,7 @@ function handleRelease(notes) {
     let freshObs = null;
     try {
         if (typeof observePage === "function") {
-            freshObs = observePage({ show_badges: false });
+            freshObs = observePage({ show_badges: true });
         }
     } catch (e) {
         console.warn("[AgentSocket] Auto-observe failed on release:", e);
@@ -2053,6 +2209,16 @@ if (typeof window !== "undefined") {
     window.__agentsocket_takeover = handleTakeover;
     window.__agentsocket_release = handleRelease;
     window.__agentsocket_toggle_minimize = toggleMinimize;
+    window.__agentsocket_reposition_badges = handleBadgeReposition;
+    window.__agentsocket_clear_badges = removeBadges;
+
+    if (window.addEventListener) {
+        window.addEventListener("keydown", (e) => {
+            if (e && e.key === "Escape") {
+                removeBadges();
+            }
+        }, { passive: true });
+    }
 }
 
 if (typeof module !== "undefined" && module.exports) {
@@ -2064,6 +2230,8 @@ if (typeof module !== "undefined" && module.exports) {
         traverseAriaTree,
         renderBadges,
         removeBadges,
+        repositionBadges,
+        handleBadgeReposition,
         observePage,
         actClick,
         actType,

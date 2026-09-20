@@ -66,7 +66,12 @@ function loadAuthorizedSessions() {
                 data.authorized_sessions_list.forEach(item => authorizedSessions.add(item));
             }
             if (data.session_permissions_list && Array.isArray(data.session_permissions_list)) {
-                data.session_permissions_list.forEach(([k, v]) => sessionPermissions.set(k, v));
+                data.session_permissions_list.forEach(([k, v]) => {
+                    if (v && typeof v === "object") {
+                        v.enable_vision = false;
+                    }
+                    sessionPermissions.set(k, v);
+                });
             }
             console.log(`[Hub] Hydrated ${authorizedSessions.size} authorized sessions from storage (Spec 30).`);
             resolve();
@@ -184,6 +189,10 @@ class ResilientSocket {
                     await handleSetPlan(data);
                 } else if (data.type === MT.SET_MILESTONE || data.type === "set_milestone") {
                     await handleSetMilestone(data);
+                } else if (data.type === MT.HIDE_GLOW || data.type === "hide_glow") {
+                    await hideAllGlows();
+                } else if (data.type === "clear_badges") {
+                    await clearAllBadges();
                 }
             } catch (err) {
                 console.error(`[Hub] Error processing message from ${this.server.name}:`, err);
@@ -373,17 +382,19 @@ function handleIncomingStateSync(server, data) {
             message: 'Control returned to Agent.',
             priority: 1
         });
-        hideAllGlows();
     }
 }
 
-function broadcastStateChange(humanInControl, notes) {
+function broadcastStateChange(humanInControl, notes, tabGroupId = null) {
     for (const id in activeSockets) {
-        activeSockets[id].send({
-            type: MT.STATE_CHANGE,
-            human_in_control: humanInControl,
-            notes: notes || ""
-        });
+        if (activeSockets[id] && activeSockets[id].isOpen && activeSockets[id].isOpen()) {
+            activeSockets[id].send({
+                type: MT.STATE_CHANGE,
+                human_in_control: humanInControl,
+                notes: notes || "",
+                tab_group_id: tabGroupId
+            });
+        }
     }
 }
 
@@ -397,9 +408,9 @@ function updateLocalState(active, notes) {
 // REST call helper to hit the active server for release/stop
 function hitServerEndpoint(endpoint, payload = {}) {
     chrome.storage.local.get(["agent_servers"], (data) => {
-        const servers = data.agent_servers || [];
+        const servers = (data.agent_servers && data.agent_servers.length > 0) ? data.agent_servers : DEFAULT_SERVERS;
         servers.forEach(server => {
-            if (server.enabled) {
+            if (server.enabled !== false) {
                 let httpUrl = server.url.replace(/^ws/, "http");
                 let serverToken = server.token || "";
                 try {
@@ -442,15 +453,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         case MT.TOGGLE_MODE: {
             const targetMode = !humanInControl;
             const notes = message.human_intervention_notes || "";
+            const targetGroupId = (sender && sender.tab && sender.tab.groupId && sender.tab.groupId > 0) ? sender.tab.groupId : null;
 
             if (targetMode) {
                 updateLocalState(true, notes);
-                broadcastStateChange(true, notes);
+                broadcastStateChange(true, notes, targetGroupId);
                 sendResponse({ humanInControl: true });
             } else {
-                hitServerEndpoint("/human_release", { notes: notes });
+                hitServerEndpoint("/human_release", { notes: notes, tab_group_id: targetGroupId });
                 updateLocalState(false, "");
-                broadcastStateChange(false, "");
+                broadcastStateChange(false, "", targetGroupId);
                 sendResponse({ humanInControl: false });
             }
             return false;
@@ -495,26 +507,33 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return false;
         }
 
-        case MT.PAGE_TAKEOVER:
+        case MT.PAGE_TAKEOVER: {
             console.warn("[Takeover] User requested manual takeover from page overlay.");
-            updateLocalState(true, message.notes || "User clicked Take Over on page");
-            broadcastStateChange(true, message.notes || "User clicked Take Over on page");
+            const targetGroupId = (sender && sender.tab && sender.tab.groupId && sender.tab.groupId > 0) ? sender.tab.groupId : null;
+            const notes = message.notes || "User clicked Take Over on page";
+            updateLocalState(true, notes);
+            broadcastStateChange(true, notes, targetGroupId);
             return false;
+        }
 
-        case MT.PAGE_STOP:
+        case MT.PAGE_STOP: {
             console.warn("[Takeover] User clicked Stop. Terminating active tasks.");
             authorizedSessions.clear();
-            hitServerEndpoint("/stop");
+            const targetGroupId = (sender && sender.tab && sender.tab.groupId && sender.tab.groupId > 0) ? sender.tab.groupId : null;
+            hitServerEndpoint("/stop", targetGroupId ? { tab_group_id: targetGroupId } : {});
             updateLocalState(false, "");
-            broadcastStateChange(false, "");
+            broadcastStateChange(false, "", targetGroupId);
             return false;
+        }
 
-        case MT.PAGE_RESUME:
+        case MT.PAGE_RESUME: {
             console.log("[Takeover] User clicked Resume and continue with notes:", message.notes);
-            hitServerEndpoint("/human_release", { notes: message.notes });
+            const targetGroupId = (sender && sender.tab && sender.tab.groupId && sender.tab.groupId > 0) ? sender.tab.groupId : null;
+            hitServerEndpoint("/human_release", { notes: message.notes, tab_group_id: targetGroupId });
             updateLocalState(false, "");
-            broadcastStateChange(false, "");
+            broadcastStateChange(false, "", targetGroupId);
             return false;
+        }
 
         case MT.RELOAD_CONNECTIONS:
             console.log("[Hub] Reloading connections based on settings changes.");
@@ -557,11 +576,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                             return;
                         }
                         const session = activeSessions.get(group.title);
+                        const perms = sessionPermissions.get(group.title) || sessionPermissions.get(group.title.replace(/^✅\s*/, '')) || { enable_vision: false };
                         if (session && session.active === true) {
                             sendResponse({
                                 inActiveSession: true,
                                 session_title: group.title,
                                 group_color: session.groupColor || group.color || "purple",
+                                enable_vision: perms.enable_vision === true,
                                 human_in_control: humanInControl,
                                 progress_percent: session.progress_percent,
                                 step_current: session.step_current,
@@ -575,10 +596,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 } else {
                     for (const [title, sess] of activeSessions.entries()) {
                         if (sess.tabId === tabId && sess.active === true && !title.startsWith("✅")) {
+                            const perms = sessionPermissions.get(title) || sessionPermissions.get(title.replace(/^✅\s*/, '')) || { enable_vision: false };
                             sendResponse({
                                 inActiveSession: true,
                                 session_title: title,
                                 group_color: sess.groupColor || "purple",
+                                enable_vision: perms.enable_vision === true,
                                 human_in_control: humanInControl,
                                 progress_percent: sess.progress_percent,
                                 step_current: sess.step_current,
@@ -627,7 +650,7 @@ async function ensureAuthorized(sessionTitle, server) {
     // Auto-authorize if server explicitly configured with auto_authorize
     if (server && server.auto_authorize) {
         authorizedSessions.add(title);
-        sessionPermissions.set(title, { enable_subskills: true, enable_vision: true });
+        sessionPermissions.set(title, { enable_subskills: true, enable_vision: false });
         saveAuthorizedSessions();
         return true;
     }
@@ -695,10 +718,12 @@ async function sendGlowToTab(tabId, sessionTitle, groupColor) {
     if (humanInControl) return;
     const sess = activeSessions.get(sessionTitle);
     const existingPlan = sessionPlans.get(sessionTitle) || sessionPlans.get((sessionTitle || "").replace(/^✅\s*/, ''));
+    const perms = sessionPermissions.get(sessionTitle) || sessionPermissions.get((sessionTitle || "").replace(/^✅\s*/, '')) || { enable_vision: false };
     const msg = {
         type: MT.SHOW_GLOW,
         session_title: sessionTitle || "AgentSocket Task",
         group_color: groupColor || "purple",
+        enable_vision: perms.enable_vision === true,
         progress_percent: sess ? sess.progress_percent : (existingPlan ? existingPlan.progress_percent : undefined),
         step_current: sess ? sess.step_current : undefined,
         step_total: sess ? sess.step_total : undefined,
@@ -743,7 +768,7 @@ async function handleSocketAction(command, server) {
         case AT.EXECUTE_JS:
             return await handleExecuteJS(command.target_data, sessionTitle, groupColor);
         case AT.TASK_COMPLETE:
-            return await handleTaskComplete(sessionTitle);
+            return await handleTaskComplete(sessionTitle, command.target_data || command.result || command.payload?.result);
         case AT.OBSERVE_PAGE:
         case "observe_page":
             return await handleObservePage(command, sessionTitle);
@@ -792,10 +817,14 @@ async function getActiveTabForSession(sessionTitle, tabGroupId) {
         } catch (e) {}
     }
 
-    try {
-        const activeTabs = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (activeTabs && activeTabs.length > 0) return activeTabs[0].id;
-    } catch (e) {}
+    // Spec 34/35: Strictly isolate sessions to designated tab groups.
+    // NEVER hijack random foreground tabs (e.g. personal tabs) if a session/group was requested!
+    if (!sessionTitle && (!tabGroupId || Number(tabGroupId) <= 0)) {
+        try {
+            const activeTabs = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (activeTabs && activeTabs.length > 0) return activeTabs[0].id;
+        } catch (e) {}
+    }
 
     return null;
 }
@@ -806,10 +835,16 @@ async function handleObservePage(command, sessionTitle) {
     if (!tabId) {
         return { status: "error", message: "No active tab found for session observation." };
     }
+
+    const perms = sessionPermissions.get(title) || sessionPermissions.get((title || "").replace(/^✅\s*/, '')) || { enable_vision: false };
+    const options = Object.assign({}, command.options || (typeof command.target_data === "object" ? command.target_data : {}), {
+        enable_vision: perms.enable_vision === true
+    });
+
     try {
         const response = await chrome.tabs.sendMessage(tabId, {
             type: MT.OBSERVE_PAGE || "observe_page",
-            options: command.options || (typeof command.target_data === "object" ? command.target_data : {})
+            options: options
         });
         return response || { status: "success", elements: [] };
     } catch (err) {
@@ -820,7 +855,7 @@ async function handleObservePage(command, sessionTitle) {
             });
             const retryResponse = await chrome.tabs.sendMessage(tabId, {
                 type: MT.OBSERVE_PAGE || "observe_page",
-                options: command.options || (typeof command.target_data === "object" ? command.target_data : {})
+                options: options
             });
             return retryResponse || { status: "success", elements: [] };
         } catch (retryErr) {
@@ -911,7 +946,7 @@ async function handleScreenshot(command, sessionTitle) {
     }
 }
 
-async function handleTaskComplete(sessionTitle) {
+async function handleTaskComplete(sessionTitle, result) {
     const cleanTitle = sessionTitle.replace(/^✅\s*/, '');
     authorizedSessions.delete(sessionTitle);
     authorizedSessions.delete(cleanTitle);
@@ -924,7 +959,16 @@ async function handleTaskComplete(sessionTitle) {
     activeSessions.delete(cleanTitle);
     saveActiveSessions();
 
+    const resultSummary = result || (sess ? sess.last_result : null) || "Task completed successfully";
+
     try {
+        // Spec 34: Dispatch terminal task_complete frame to active tabs
+        await broadcastToSessionTabs(sessionTitle, {
+            type: "task_complete",
+            session_title: `✅ ${cleanTitle}`,
+            result: resultSummary
+        });
+
         let groups = await chrome.tabGroups.query({ title: sessionTitle });
         if (!groups || groups.length === 0) {
             groups = await chrome.tabGroups.query({ title: cleanTitle });
@@ -937,7 +981,6 @@ async function handleTaskComplete(sessionTitle) {
                     color: "grey"
                 }, resolve);
             });
-            hideAllGlows();
             await forwardProgressToTabs({
                 session_title: `✅ ${cleanTitle}`,
                 progress_percent: 100,
@@ -947,8 +990,7 @@ async function handleTaskComplete(sessionTitle) {
             });
             return { status: "success", message: "Task marked complete and tab group renamed." };
         }
-        hideAllGlows();
-        return { status: "success", message: "Task marked complete and glows cleared." };
+        return { status: "success", message: "Task marked complete." };
     } catch (e) {
         return { status: "error", message: e.message };
     }
@@ -1073,6 +1115,7 @@ async function handleSetPlan(data) {
         progress_percent: data.progress_percent || 0,
         current_action: data.current_action || null
     };
+    const perms = sessionPermissions.get(sessionTitle) || sessionPermissions.get(cleanTitle) || { enable_vision: false };
     sessionPlans.set(sessionTitle, planObj);
     sessionPlans.set(cleanTitle, planObj);
     saveSessionPlans();
@@ -1083,7 +1126,8 @@ async function handleSetPlan(data) {
         milestones: planObj.milestones,
         active_index: planObj.active_index,
         progress_percent: planObj.progress_percent,
-        current_action: planObj.current_action
+        current_action: planObj.current_action,
+        enable_vision: perms.enable_vision === true
     });
 }
 
@@ -1474,6 +1518,19 @@ async function hideAllGlows() {
         }
     } catch(err) {
         console.error("Error clearing glows:", err);
+    }
+}
+
+async function clearAllBadges() {
+    try {
+        const tabs = await chrome.tabs.query({});
+        for (const tab of tabs) {
+            try {
+                chrome.tabs.sendMessage(tab.id, { type: "clear_badges" });
+            } catch(e) {}
+        }
+    } catch(err) {
+        console.error("Error clearing badges across tabs:", err);
     }
 }
 

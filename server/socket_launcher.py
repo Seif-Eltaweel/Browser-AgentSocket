@@ -1078,6 +1078,15 @@ def cmd_stop(args: argparse.Namespace) -> None:
     print(json.dumps(res, indent=2))
 
 
+def cmd_clear_badges(args: argparse.Namespace) -> None:
+    try:
+        ensure_ready(DEFAULT_SERVER_URL)
+        resp = requests.post(f"{DEFAULT_SERVER_URL}/clear_badges", headers=get_auth_headers(), timeout=5.0)
+        print(json.dumps(resp.json(), indent=2))
+    except Exception as e:
+        print(json.dumps({"status": "error", "message": str(e)}, indent=2))
+
+
 def cmd_kill(args: argparse.Namespace) -> None:
     kill_server()
 
@@ -1189,6 +1198,8 @@ COMMAND_DISPATCH: dict[str, Callable[[argparse.Namespace], None]] = {
     "progress": cmd_progress,
     "release": cmd_release,
     "stop": cmd_stop,
+    "clear": cmd_clear_badges,
+    "clear-badges": cmd_clear_badges,
     "kill": cmd_kill,
     "history": cmd_history,
     "logs": cmd_logs,
@@ -1227,6 +1238,8 @@ def build_cli_parser() -> argparse.ArgumentParser:
     rel_parser.add_argument("--notes", default="", help="Handoff notes for the agent")
 
     subparsers.add_parser("stop", help="Stop running tasks and reset state")
+    subparsers.add_parser("clear", help="Clear all in-page badges and HUD elements across tabs")
+    subparsers.add_parser("clear-badges", help="Alias for 'clear'")
     subparsers.add_parser("kill", help="Terminate gateway server background process")
 
     hist_parser = subparsers.add_parser("history", help="List past browser sessions from index.json")

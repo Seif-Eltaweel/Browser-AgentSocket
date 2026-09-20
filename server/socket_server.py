@@ -684,17 +684,23 @@ async def extension_endpoint(websocket: WebSocket) -> None:
                     state.agent_name = message.get("agent_name")
                 if message.get("group_color"):
                     state.group_color = message.get("group_color")
-                new_state = message.get("human_in_control", False)
+                new_state = bool(message.get("human_in_control", False))
+                notes = message.get("notes") or ""
                 gid = message.get("tab_group_id") or message.get("groupId")
-                session = state.get_session(gid)
-                if not new_state and session.human_in_control:
-                    logger.info("Extension sent release state. Release must go through the /human_release endpoint.")
-                else:
+                
+                target_sessions = [state.get_session(gid)] if gid is not None and int(gid) > 0 else list(state.tab_sessions.values())
+                if 0 not in state.tab_sessions:
+                    target_sessions.append(state.get_session(0))
+
+                for session in target_sessions:
                     session.human_in_control = new_state
-                    if session.human_in_control:
+                    if new_state:
                         session.takeover_start_time = time.time()
-                        if message.get("notes"):
-                            session.last_intervention_notes = message.get("notes")
+                        if notes:
+                            session.last_intervention_notes = notes
+                    else:
+                        if notes:
+                            session.last_intervention_notes = notes
                     logger.info(f"State Sync [Group {session.tab_group_id}] -> Human In Control: {session.human_in_control}")
 
             elif msg_type in (
@@ -1048,8 +1054,8 @@ async def observe_page(
         "tab_group_id": session.tab_group_id,
         "session_title": session_title,
         "take_screenshot": take_screenshot,
-        "target_data": {"take_screenshot": take_screenshot},
-        "options": {"take_screenshot": take_screenshot},
+        "target_data": {"take_screenshot": take_screenshot, "action_detail": action_detail},
+        "options": {"take_screenshot": take_screenshot, "action_detail": action_detail},
     }
 
     try:
@@ -1572,7 +1578,32 @@ async def stop_active_task(tab_group_id: int | None = None) -> dict[str, Any]:
             if tab_group_id is not None:
                 stop_sync["tab_group_id"] = tab_group_id
             await state.extension_ws.send_text(json.dumps(stop_sync))
+
+            # Broadcast hide_glow and clear_badges to clear all HUD artifacts and badging
+            await state.extension_ws.send_text(json.dumps({
+                "type": "hide_glow",
+                "session_title": "",
+            }))
+            await state.extension_ws.send_text(json.dumps({
+                "type": "clear_badges",
+                "session_title": "",
+            }))
         except Exception as e:
-            logger.warning(f"Error sending state_sync on stop: {e}")
+            logger.warning(f"Error sending state_sync / clear on stop: {e}")
 
     return {"status": ResponseStatus.SUCCESS.value}
+
+
+@app.post("/clear_badges")
+async def clear_badges_endpoint(tab_group_id: int | None = None) -> dict[str, Any]:
+    state.record_activity()
+    if state.extension_ws:
+        try:
+            await state.extension_ws.send_text(json.dumps({
+                "type": "clear_badges",
+                "tab_group_id": tab_group_id,
+            }))
+        except Exception as e:
+            logger.warning(f"Error broadcasting clear_badges: {e}")
+            return {"status": "error", "message": str(e)}
+    return {"status": "success", "message": "Clear badges broadcast sent."}
