@@ -54,41 +54,51 @@ from server.models import (
     PlanPayload,
     UpdateMilestonePayload,
 )
+from server.config import (
+    get_pid_file_path,
+    get_port_file_path,
+    get_token_file_path,
+    get_db_path,
+    get_default_logs_dir,
+)
 from server.session import session_manager
 
 # Configurable idle timeout (default: 20 minutes = 1200 seconds)
 IDLE_TIMEOUT_SECONDS = float(os.environ.get("SOCKET_IDLE_TIMEOUT", "1200"))
-PID_FILE_PATH = os.path.join(REPO_ROOT, ".socket_server.pid")
-PORT_FILE_PATH = os.path.join(REPO_ROOT, ".socket_server.port")
-TOKEN_FILE_PATH = os.path.join(REPO_ROOT, ".socket_server.token")
+PID_FILE_PATH = str(get_pid_file_path())
+PORT_FILE_PATH = str(get_port_file_path())
+TOKEN_FILE_PATH = str(get_token_file_path())
 AUTH_TOKEN_HEADER = "X-AgentSocket-Token"
 AUTH_TOKEN_PARAM = "token"
 
 
 def write_token_file(token: str) -> None:
+    token_file = str(get_token_file_path())
     try:
-        with open(TOKEN_FILE_PATH, "w", encoding="utf-8") as f:
+        with open(token_file, "w", encoding="utf-8") as f:
             f.write(token)
     except Exception as e:
         logger.warning(f"Unable to write token file: {e}")
 
 
 def remove_token_file() -> None:
+    token_file = str(get_token_file_path())
     try:
-        if os.path.exists(TOKEN_FILE_PATH):
-            os.remove(TOKEN_FILE_PATH)
+        if os.path.exists(token_file):
+            os.remove(token_file)
     except Exception as e:
         logger.warning(f"Unable to remove token file: {e}")
 
 
 def get_or_generate_token() -> str:
     env_token = os.environ.get("AGENTSOCKET_TOKEN")
+    token_file = str(get_token_file_path())
     if env_token:
         write_token_file(env_token)
         return env_token
-    if os.path.exists(TOKEN_FILE_PATH):
+    if os.path.exists(token_file):
         try:
-            with open(TOKEN_FILE_PATH, "r", encoding="utf-8") as f:
+            with open(token_file, "r", encoding="utf-8") as f:
                 content = f.read().strip()
                 if content:
                     return content
@@ -203,17 +213,19 @@ state = SystemState()
 
 
 def write_pid_file() -> None:
+    pid_file = str(get_pid_file_path())
     try:
-        with open(PID_FILE_PATH, "w", encoding="utf-8") as f:
+        with open(pid_file, "w", encoding="utf-8") as f:
             f.write(str(os.getpid()))
     except Exception as e:
         logger.warning(f"Unable to write PID file: {e}")
 
 
 def remove_pid_file() -> None:
+    pid_file = str(get_pid_file_path())
     try:
-        if os.path.exists(PID_FILE_PATH):
-            os.remove(PID_FILE_PATH)
+        if os.path.exists(pid_file):
+            os.remove(pid_file)
     except Exception as e:
         logger.warning(f"Unable to remove PID file: {e}")
 
@@ -236,19 +248,21 @@ def get_bound_port() -> int:
 
 
 def write_port_file(port: int | None = None) -> None:
+    port_file = str(get_port_file_path())
     try:
         if port is None:
             port = get_bound_port()
-        with open(PORT_FILE_PATH, "w", encoding="utf-8") as f:
+        with open(port_file, "w", encoding="utf-8") as f:
             f.write(str(port))
     except Exception as e:
         logger.warning(f"Unable to write port file: {e}")
 
 
 def remove_port_file() -> None:
+    port_file = str(get_port_file_path())
     try:
-        if os.path.exists(PORT_FILE_PATH):
-            os.remove(PORT_FILE_PATH)
+        if os.path.exists(port_file):
+            os.remove(port_file)
     except Exception as e:
         logger.warning(f"Unable to remove port file: {e}")
 
@@ -1367,7 +1381,7 @@ async def capture_screenshot(
             try:
                 _, b64_data = data_url.split("base64,", 1)
                 img_bytes = base64.b64decode(b64_data)
-                save_dir = active_sess.artifacts_dir if active_sess else os.path.join(REPO_ROOT, "server", "logs", "screenshots")
+                save_dir = active_sess.artifacts_dir if active_sess else os.path.join(str(get_default_logs_dir()), "screenshots")
                 os.makedirs(save_dir, exist_ok=True)
                 fname = filename or f"screenshot_{int(time.time() * 1000)}.png"
                 if not fname.endswith(".png"):

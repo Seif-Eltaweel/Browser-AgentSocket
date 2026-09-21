@@ -8,7 +8,9 @@ import os
 import sqlite3
 from contextlib import contextmanager
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "agentsocket.db")
+from server.config import get_db_path
+
+DB_PATH = str(get_db_path())
 
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:
@@ -75,7 +77,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
 
 def init_db(db_path: str | None = None) -> None:
     """Initializes SQLite tables and enables WAL mode."""
-    target_path = db_path or DB_PATH
+    target_path = db_path or str(get_db_path())
     os.makedirs(os.path.dirname(os.path.abspath(target_path)), exist_ok=True)
     with get_connection(target_path) as conn:
         _ensure_schema(conn)
@@ -84,7 +86,7 @@ def init_db(db_path: str | None = None) -> None:
 @contextmanager
 def get_connection(db_path: str | None = None):
     """Provides a transactional database connection with automatic commit/rollback."""
-    target_path = db_path or DB_PATH
+    target_path = db_path or str(get_db_path())
     os.makedirs(os.path.dirname(os.path.abspath(target_path)), exist_ok=True)
     needs_init = not os.path.exists(target_path) or os.path.getsize(target_path) == 0
     conn = sqlite3.connect(target_path, timeout=5.0)

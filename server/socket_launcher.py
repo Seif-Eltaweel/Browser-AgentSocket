@@ -38,11 +38,19 @@ from server.session import (
     print_subskills_table,
     session_manager,
 )
+from server.config import (
+    get_pid_file_path,
+    get_port_file_path,
+    get_token_file_path,
+    get_db_path,
+    get_default_logs_dir,
+    get_state_dir,
+)
 
 EXTENSION_DIR = os.path.join(REPO_ROOT, "extension")
-PID_FILE_PATH = os.path.join(REPO_ROOT, ".socket_server.pid")
-PORT_FILE_PATH = os.path.join(REPO_ROOT, ".socket_server.port")
-TOKEN_FILE_PATH = os.path.join(REPO_ROOT, ".socket_server.token")
+PID_FILE_PATH = str(get_pid_file_path())
+PORT_FILE_PATH = str(get_port_file_path())
+TOKEN_FILE_PATH = str(get_token_file_path())
 DEFAULT_SERVER_URL = "http://127.0.0.1:8000"
 AUTH_TOKEN_HEADER = "X-AgentSocket-Token"
 
@@ -52,9 +60,10 @@ def get_gateway_token() -> str | None:
     env_tok = os.environ.get("AGENTSOCKET_TOKEN")
     if env_tok:
         return env_tok
-    if os.path.exists(TOKEN_FILE_PATH):
+    token_file = str(get_token_file_path())
+    if os.path.exists(token_file):
         try:
-            with open(TOKEN_FILE_PATH, "r", encoding="utf-8") as f:
+            with open(token_file, "r", encoding="utf-8") as f:
                 content = f.read().strip()
                 if content:
                     return content
@@ -102,33 +111,36 @@ def is_pid_running(pid: int) -> bool:
 
 def clean_stale_pid_file() -> None:
     """Removes PID file if the corresponding process is not running."""
-    if os.path.exists(PID_FILE_PATH):
+    pid_file = str(get_pid_file_path())
+    if os.path.exists(pid_file):
         try:
-            with open(PID_FILE_PATH, "r", encoding="utf-8") as f:
+            with open(pid_file, "r", encoding="utf-8") as f:
                 pid = int(f.read().strip())
             if not is_pid_running(pid):
-                os.remove(PID_FILE_PATH)
+                os.remove(pid_file)
         except Exception:
             try:
-                os.remove(PID_FILE_PATH)
+                os.remove(pid_file)
             except Exception:
                 pass
 
 
 def clean_stale_port_file() -> None:
     """Removes port file if the corresponding server process is not running."""
-    if os.path.exists(PORT_FILE_PATH):
+    port_file = str(get_port_file_path())
+    pid_file = str(get_pid_file_path())
+    if os.path.exists(port_file):
         try:
-            if os.path.exists(PID_FILE_PATH):
-                with open(PID_FILE_PATH, "r", encoding="utf-8") as f:
+            if os.path.exists(pid_file):
+                with open(pid_file, "r", encoding="utf-8") as f:
                     pid = int(f.read().strip())
                 if not is_pid_running(pid):
-                    os.remove(PORT_FILE_PATH)
+                    os.remove(port_file)
             else:
-                os.remove(PORT_FILE_PATH)
+                os.remove(port_file)
         except Exception:
             try:
-                os.remove(PORT_FILE_PATH)
+                os.remove(port_file)
             except Exception:
                 pass
 
@@ -155,13 +167,15 @@ def resolve_server_url(default_port: int = 8000) -> str:
             pass
 
     # 2. File discovery (.socket_server.port)
-    if os.path.exists(PORT_FILE_PATH):
+    port_file = str(get_port_file_path())
+    pid_file = str(get_pid_file_path())
+    if os.path.exists(port_file):
         try:
-            with open(PORT_FILE_PATH, "r", encoding="utf-8") as f:
+            with open(port_file, "r", encoding="utf-8") as f:
                 port_val = int(f.read().strip())
             candidate_url = f"http://127.0.0.1:{port_val}"
             # Trust port file unless a stale dead PID is confirmed
-            if not os.path.exists(PID_FILE_PATH) or is_process_running(PID_FILE_PATH) or is_server_running(candidate_url):
+            if not os.path.exists(pid_file) or is_process_running(pid_file) or is_server_running(candidate_url):
                 return candidate_url
             else:
                 clean_stale_port_file()
@@ -265,7 +279,7 @@ def ensure_server_running(port: int = 8000, timeout: float = 8.0) -> bool:
 
     proc = subprocess.Popen(
         cmd,
-        cwd=REPO_ROOT,
+        cwd=REPO_ROOT if os.path.exists(os.path.join(REPO_ROOT, "server")) else None,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         creationflags=WIN_CREATE_FLAGS,
@@ -273,9 +287,9 @@ def ensure_server_running(port: int = 8000, timeout: float = 8.0) -> bool:
     )
 
     try:
-        with open(PID_FILE_PATH, "w", encoding="utf-8") as f:
+        with open(str(get_pid_file_path()), "w", encoding="utf-8") as f:
             f.write(str(proc.pid))
-        with open(PORT_FILE_PATH, "w", encoding="utf-8") as f:
+        with open(str(get_port_file_path()), "w", encoding="utf-8") as f:
             f.write(str(port))
     except Exception as e:
         logger.warning(f"Could not write PID/port file: {e}")
@@ -716,9 +730,11 @@ def stop_tasks(server_url: str = DEFAULT_SERVER_URL) -> dict[str, Any]:
 def kill_server() -> bool:
     """Terminates the running gateway server process."""
     pid = None
-    if os.path.exists(PID_FILE_PATH):
+    pid_file = str(get_pid_file_path())
+    port_file = str(get_port_file_path())
+    if os.path.exists(pid_file):
         try:
-            with open(PID_FILE_PATH, "r", encoding="utf-8") as f:
+            with open(pid_file, "r", encoding="utf-8") as f:
                 pid = int(f.read().strip())
         except Exception:
             pass
@@ -733,14 +749,14 @@ def kill_server() -> bool:
         except Exception as e:
             logger.error(f"Error killing PID {pid}: {e}")
 
-    if os.path.exists(PID_FILE_PATH):
+    if os.path.exists(pid_file):
         try:
-            os.remove(PID_FILE_PATH)
+            os.remove(pid_file)
         except Exception:
             pass
-    if os.path.exists(PORT_FILE_PATH):
+    if os.path.exists(port_file):
         try:
-            os.remove(PORT_FILE_PATH)
+            os.remove(port_file)
         except Exception:
             pass
     return True

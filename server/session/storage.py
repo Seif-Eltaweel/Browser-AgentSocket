@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Any
 import yaml
 
+from server.config import get_default_logs_dir, get_db_path
 from server.db import init_db, get_connection, DB_PATH
 from server.logger import logger
 from server.models import (
@@ -25,7 +26,7 @@ from server.models import (
 )
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-DEFAULT_BASE_LOG_DIR = os.path.join(REPO_ROOT, "server", "logs")
+DEFAULT_BASE_LOG_DIR = str(get_default_logs_dir())
 DEFAULT_SUBSKILLS_DIR = os.path.join(REPO_ROOT, "server", "subskills")
 DEFAULT_ADHOCS_DIR = os.path.join(REPO_ROOT, "server", "adhocs")
 
@@ -55,20 +56,21 @@ class SessionStorage:
         adhocs_dir: str | None = None,
         db_path: str | None = None,
     ):
-        self.base_log_dir = os.path.abspath(base_log_dir)
+        resolved_base_log = base_log_dir or str(get_default_logs_dir())
+        self.base_log_dir = os.path.abspath(resolved_base_log)
         self.history_index_dir = os.path.join(self.base_log_dir, "sessions", "history_logs")
         self.index_file = os.path.join(self.history_index_dir, "index.json")
 
         if db_path:
             self.db_path = os.path.abspath(db_path)
-        elif os.path.abspath(base_log_dir) == os.path.abspath(DEFAULT_BASE_LOG_DIR):
-            self.db_path = DB_PATH
+        elif os.path.abspath(self.base_log_dir) == os.path.abspath(str(get_default_logs_dir())):
+            self.db_path = str(get_db_path())
         else:
             self.db_path = os.path.join(self.base_log_dir, "agentsocket.db")
 
         if subskills_dir:
             self.subskills_dir = os.path.abspath(subskills_dir)
-        elif os.path.abspath(base_log_dir) == os.path.abspath(DEFAULT_BASE_LOG_DIR):
+        elif os.path.abspath(self.base_log_dir) == os.path.abspath(str(get_default_logs_dir())):
             self.subskills_dir = os.path.abspath(DEFAULT_SUBSKILLS_DIR)
         else:
             self.subskills_dir = os.path.abspath(os.path.join(os.path.dirname(self.base_log_dir), "subskills"))
