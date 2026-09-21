@@ -1,0 +1,7 @@
+# AgentSocket-Browser Development & CI Dependencies (Spec 37)
+-r requirements.txt
+pytest>=8.0.0
+httpx>=0.27.0
+ruff>=0.4.0
+build>=1.0.0
+platformdirs>=4.0.0

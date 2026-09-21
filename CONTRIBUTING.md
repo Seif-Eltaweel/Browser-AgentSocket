@@ -1,5 +1,7 @@
 # 🤝 Contributing to AgentSocket-Browser
 
+[![CI Pipeline](https://github.com/Seif-Eltaweel/agent_bro_hands/actions/workflows/ci.yml/badge.svg)](https://github.com/Seif-Eltaweel/agent_bro_hands/actions/workflows/ci.yml)
+
 Thank you for your interest in contributing to **AgentSocket-Browser**! We are committed to building a secure, high-performance, human-in-the-loop browser automation bridge for the AI agent ecosystem.
 
 This guide outlines our development workflow, architectural invariants, code quality standards, and pull request review process.
@@ -87,18 +89,26 @@ We enforce the [Conventional Commits](https://www.conventionalcommits.org/) spec
 
 ## 5. Testing & Quality Gates
 
-Every Pull Request must pass 100% of test suites before merge:
+Every Pull Request must pass 100% of the CI verification matrix across Ubuntu, Windows, and macOS:
 
 ```bash
-# 1. Run complete Python test suite (44+ tests)
+# 1. Run Ruff linter and code quality checks
+ruff check server tests
+
+# 2. Run complete Python cross-platform test suite (162+ tests)
 python -m unittest discover tests
 
-# 2. Run JavaScript protocol validation tests
+# 3. Run all 5 Chrome Extension JavaScript test suites (Node.js 20+)
 node tests/test_protocol.test.js
+node tests/test_content_aria.test.js
+node tests/test_content_atomic_driver.test.js
+node tests/test_content_hud_ticker.test.js
+node tests/test_spec32_extension_hud.test.js
 
-# 3. Verify CLI subcommands
-python server/socket_launcher.py status
-python server/socket_launcher.py subskills list
+# 4. Verify distribution wheel build & CLI smoke test
+python -m build
+agentsocket --help
+browser-socket --help
 ```
 
 ---

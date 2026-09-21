@@ -1,0 +1,108 @@
+name: CI Pipeline
+
+"on":
+  push:
+    branches: [ main, "feat/**" ]
+  pull_request:
+    branches: [ main ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Code Quality & Linting
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Ruff
+        run: pip install ruff
+
+      - name: Run Ruff Lint Checks
+        run: ruff check server tests
+
+  test-python:
+    name: Python ${{ matrix.python-version }} on ${{ matrix.os }}
+    needs: [lint]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install httpx pytest platformdirs
+
+      - name: Run Python Test Suite
+        env:
+          AGENTSOCKET_STATE_DIR: ${{ runner.temp }}/agentsocket_test_state
+          PYTHONUNBUFFERED: "1"
+        run: |
+          python -m unittest discover tests
+
+  test-extension:
+    name: Chrome Extension JS Test Suites
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run JS Unit Tests
+        run: |
+          node tests/test_protocol.test.js
+          node tests/test_content_aria.test.js
+          node tests/test_content_atomic_driver.test.js
+          node tests/test_content_hud_ticker.test.js
+          node tests/test_spec32_extension_hud.test.js
+
+  package-check:
+    name: Package Build & CLI Smoke Test
+    needs: [test-python, test-extension]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Build Tools
+        run: pip install build
+
+      - name: Build Package Distribution
+        run: python -m build
+
+      - name: Test Wheel Install
+        run: |
+          pip install dist/*.whl
+          agentsocket --help
+          browser-socket --help
