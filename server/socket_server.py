@@ -367,6 +367,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Spec 35: Token Endpoint Transport Hardening & CORS Exclusion Middleware
+# Registered after CORSMiddleware so it executes first on incoming requests (outermost wrapper)
+@app.middleware("http")
+async def secure_token_endpoint_middleware(request: Request, call_next):
+    if request.url.path == "/api/token":
+        origin = request.headers.get("origin")
+        sec_fetch_site = request.headers.get("sec-fetch-site")
+
+        # Disallow cross-origin browser fetches to /api/token
+        if sec_fetch_site in ("cross-site", "same-site"):
+            return JSONResponse(status_code=403, content={"error": "Cross-origin access forbidden"})
+
+        if origin and not origin.startswith("chrome-extension://"):
+            return JSONResponse(status_code=403, content={"error": "Origin access forbidden"})
+
+    return await call_next(request)
+
 
 @app.get("/")
 def read_root(tab_group_id: int | None = None) -> dict[str, Any]:
@@ -396,10 +413,18 @@ def get_status(tab_group_id: int | None = None) -> dict[str, Any]:
 
 @app.get("/api/token")
 def get_ephemeral_token(request: Request) -> dict[str, str]:
-    """Spec 30: Local token bootstrap endpoint for local browser extensions and tools."""
+    """Spec 30 & Spec 35: Local token bootstrap endpoint for local browser extensions and tools."""
     client_host = request.client.host if request.client else ""
     if client_host not in ["127.0.0.1", "localhost", "::1", "testclient"]:
         return JSONResponse(status_code=403, content={"error": "Forbidden: localhost only"})
+
+    origin = request.headers.get("origin")
+    sec_fetch_site = request.headers.get("sec-fetch-site")
+    if sec_fetch_site in ("cross-site", "same-site"):
+        return JSONResponse(status_code=403, content={"error": "Cross-origin access forbidden"})
+    if origin and not origin.startswith("chrome-extension://"):
+        return JSONResponse(status_code=403, content={"error": "Origin access forbidden"})
+
     return {"token": state.server_token or ""}
 
 
@@ -646,12 +671,13 @@ def run_adhoc(payload: RunAdhocPayload) -> dict[str, Any]:
 @app.websocket("/ws/extension")
 async def extension_endpoint(websocket: WebSocket) -> None:
     token = websocket.headers.get("x-agentsocket-token") or websocket.query_params.get("token")
-    origin = websocket.headers.get("origin") or ""
-    is_extension_origin = origin.startswith("chrome-extension://")
     has_valid_token = bool(state.server_token and token == state.server_token)
 
-    if not (has_valid_token or is_extension_origin):
-        logger.warning("Rejecting unauthenticated WebSocket connection attempt on /ws/extension.")
+    # Invariant: Origin header alone NEVER bypasses authentication (Spec 35)
+    if not has_valid_token:
+        logger.warning(
+            "Rejecting unauthenticated WebSocket connection attempt on /ws/extension (token invalid or missing)."
+        )
         await websocket.close(code=1008, reason="Unauthorized: invalid or missing gateway token")
         return
 

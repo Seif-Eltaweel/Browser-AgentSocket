@@ -140,7 +140,7 @@ Add AgentSocket to your client's MCP configuration (`claude_desktop_config.json`
   "mcpServers": {
     "browser-socket": {
       "command": "python",
-      "args": ["c:/Users/20106/agent_bro_hands/server/socket_mcp.py"]
+      "args": ["-m", "server.socket_mcp"]
     }
   }
 }

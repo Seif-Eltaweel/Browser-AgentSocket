@@ -20,6 +20,17 @@ document.addEventListener("DOMContentLoaded", () => {
     if (sessionDescElem) {
         sessionDescElem.textContent = `"${sessionTitle}"`;
     }
+    // Spec 35: Persist gateway token in chrome.storage.local for resilient background WebSockets
+    if (gatewayToken) {
+        try {
+            if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+                chrome.storage.local.set({ gateway_token: gatewayToken });
+            }
+        } catch (e) {
+            console.warn("Failed to persist gateway_token:", e);
+        }
+    }
+
     if (tokenDisplay) {
         if (gatewayToken) {
             tokenDisplay.textContent = gatewayToken.length > 16 
@@ -101,6 +112,16 @@ document.addEventListener("DOMContentLoaded", () => {
             enable_subskills: enableSubskills ? enableSubskills.checked : true,
             enable_vision: enableVision ? enableVision.checked : false
         };
+
+        if (gatewayToken) {
+            try {
+                if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+                    chrome.storage.local.set({ gateway_token: gatewayToken });
+                }
+            } catch (e) {
+                console.warn("Failed to persist gateway_token on grant:", e);
+            }
+        }
 
         // Notify background script that authorization was granted for this session
         chrome.runtime.sendMessage({

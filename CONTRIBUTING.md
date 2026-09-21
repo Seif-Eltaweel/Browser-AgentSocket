@@ -75,13 +75,13 @@ We enforce the [Conventional Commits](https://www.conventionalcommits.org/) spec
 ### 4.1 Python Guidelines
 * **Style:** PEP 8 compliance.
 * **Typing:** Strict type annotations (`typing`, `Optional`, `Dict[str, Any]`, `List[str]`).
-* **Schemas:** All JSON inputs, WebSocket payloads, and event logs must use typed **Pydantic models** in [`server/models.py`](file:///c:/Users/20106/agent_bro_hands/server/models.py).
+* **Schemas:** All JSON inputs, WebSocket payloads, and event logs must use typed **Pydantic models** in [`server/models.py`](server/models.py).
 * **Process Safety:** Never use blocking sleeps in async FastAPI routes; use non-blocking event loops and timeouts.
 
 ### 4.2 JavaScript Guidelines (Chrome Extension)
 * **Manifest V3:** Adhere to Chrome Extension Manifest V3 service worker lifecycle standards.
 * **Zero Dependencies:** The extension (`extension/`) must remain lightweight with zero external npm runtime dependencies.
-* **Modularity:** Shared constants and envelope creators belong in [`extension/protocol.js`](file:///c:/Users/20106/agent_bro_hands/extension/protocol.js) using standard UMD format for cross-environment testing.
+* **Modularity:** Shared constants and envelope creators belong in [`extension/protocol.js`](extension/protocol.js) using standard UMD format for cross-environment testing.
 
 ---
 

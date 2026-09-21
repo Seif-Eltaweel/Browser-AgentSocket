@@ -186,12 +186,12 @@ sequenceDiagram
 
 | Order Step | Action Trigger | Active Files & Sequence |
 |:---|:---|:---|
-| **Step 1: System Boot** | Subsystem Init / CLI start | [`server/logger.py`](file:///c:/Users/20106/agent_bro_hands/server/logger.py) -> [`server/models.py`](file:///c:/Users/20106/agent_bro_hands/server/models.py) -> [`server/socket_launcher.py`](file:///c:/Users/20106/agent_bro_hands/server/socket_launcher.py) -> [`server/socket_server.py`](file:///c:/Users/20106/agent_bro_hands/server/socket_server.py) (FastAPI lifespan) |
-| **Step 2: Browser Handshake** | Chrome launches | [`extension/background.js`](file:///c:/Users/20106/agent_bro_hands/extension/background.js) -> [`extension/protocol.js`](file:///c:/Users/20106/agent_bro_hands/extension/protocol.js) (WebSocket connects to `ws://127.0.0.1:8000/ws/extension`) |
-| **Step 3: Agent Command** | Tool invocation | [`server/socket_mcp.py`](file:///c:/Users/20106/agent_bro_hands/server/socket_mcp.py) -> [`server/socket_server.py`](file:///c:/Users/20106/agent_bro_hands/server/socket_server.py) (`POST /execute`) |
-| **Step 4: Tab Interaction** | Browser action | [`extension/background.js`](file:///c:/Users/20106/agent_bro_hands/extension/background.js) (CDP evaluate) + [`extension/content.js`](file:///c:/Users/20106/agent_bro_hands/extension/content.js) (Shadow DOM HUD & Interaction Shield) |
-| **Step 5: Logging & Offload** | Action completed | [`server/session/manager.py`](file:///c:/Users/20106/agent_bro_hands/server/session/manager.py) -> [`server/session/storage.py`](file:///c:/Users/20106/agent_bro_hands/server/session/storage.py) (Appends `session.jsonl`, offloads >10KB payloads to `artifacts/`) |
-| **Step 6: Task Wrap-up** | Task completion | [`server/session/documenter.py`](file:///c:/Users/20106/agent_bro_hands/server/session/documenter.py) (Synthesizes `SESSION_DOCUMENT.md`) -> [`server/session/storage.py`](file:///c:/Users/20106/agent_bro_hands/server/session/storage.py) (Updates `index.json`) |
+| **Step 1: System Boot** | Subsystem Init / CLI start | [`server/logger.py`](../server/logger.py) -> [`server/models.py`](../server/models.py) -> [`server/socket_launcher.py`](../server/socket_launcher.py) -> [`server/socket_server.py`](../server/socket_server.py) (FastAPI lifespan) |
+| **Step 2: Browser Handshake** | Chrome launches | [`extension/background.js`](../extension/background.js) -> [`extension/protocol.js`](../extension/protocol.js) (WebSocket connects to `ws://127.0.0.1:8000/ws/extension`) |
+| **Step 3: Agent Command** | Tool invocation | [`server/socket_mcp.py`](../server/socket_mcp.py) -> [`server/socket_server.py`](../server/socket_server.py) (`POST /execute`) |
+| **Step 4: Tab Interaction** | Browser action | [`extension/background.js`](../extension/background.js) (CDP evaluate) + [`extension/content.js`](../extension/content.js) (Shadow DOM HUD & Interaction Shield) |
+| **Step 5: Logging & Offload** | Action completed | [`server/session/manager.py`](../server/session/manager.py) -> [`server/session/storage.py`](../server/session/storage.py) (Appends `session.jsonl`, offloads >10KB payloads to `artifacts/`) |
+| **Step 6: Task Wrap-up** | Task completion | [`server/session/documenter.py`](../server/session/documenter.py) (Synthesizes `SESSION_DOCUMENT.md`) -> [`server/session/storage.py`](../server/session/storage.py) (Updates `index.json`) |
 
 ---
 
@@ -201,24 +201,24 @@ sequenceDiagram
 
 ## 🟢 Category 1: Server Gateway & Process Orchestration
 
-### 1. [`server/logger.py`](file:///c:/Users/20106/agent_bro_hands/server/logger.py)
+### 1. [`server/logger.py`](../server/logger.py)
 - **When It Runs:** Imported immediately on startup by all Python server modules, session subsystems, and CLI runners.
 - **Usage:** Provides structured logging (`logging.getLogger("agentsocket")`) routing log events to `sys.stderr`. Severity level is dynamically configured via `SOCKET_LOG_LEVEL`.
-- **System Importance:** **Critical Invariant.** All server diagnostics **must write to `sys.stderr`**, never `sys.stdout`. If diagnostics leak into `sys.stdout`, the stdio transport stream of the Model Context Protocol ([`server/socket_mcp.py`](file:///c:/Users/20106/agent_bro_hands/server/socket_mcp.py)) will corrupt, causing the AI agent's tool parser to crash.
+- **System Importance:** **Critical Invariant.** All server diagnostics **must write to `sys.stderr`**, never `sys.stdout`. If diagnostics leak into `sys.stdout`, the stdio transport stream of the Model Context Protocol ([`server/socket_mcp.py`](../server/socket_mcp.py)) will corrupt, causing the AI agent's tool parser to crash.
 
 ---
 
-### 2. [`server/models.py`](file:///c:/Users/20106/agent_bro_hands/server/models.py)
+### 2. [`server/models.py`](../server/models.py)
 - **When It Runs:** Imported during server initialization, request validation, and test executions.
 - **Usage:** Contains all Pydantic v2 data models, PEP 604 union type annotations, and typed enums (`ActionType`, `WSMessageType`, `ControlMode`, `ResponseStatus`, `ErrorCode`, `SessionEventType`, `SubskillModel`).
 - **System Importance:** **Core Contract.** Acts as the single source of truth for message shapes and schemas across FastAPI endpoints, session records, and client responses. Prevents schema drift and runtime type errors.
 
 ---
 
-### 3. [`server/socket_launcher.py`](file:///c:/Users/20106/agent_bro_hands/server/socket_launcher.py)
+### 3. [`server/socket_launcher.py`](../server/socket_launcher.py)
 - **When It Runs:** 
   1. Triggered whenever the user or agent runs a CLI command (e.g. `python server/socket_launcher.py status|plug|history|subskills`).
-  2. Invoked internally by [`server/socket_mcp.py`](file:///c:/Users/20106/agent_bro_hands/server/socket_mcp.py) via `ensure_ready()`.
+  2. Invoked internally by [`server/socket_mcp.py`](../server/socket_mcp.py) via `ensure_ready()`.
 - **Usage:**
   - Auto-detects Chrome/Chromium executable locations across Windows Registry, macOS, and Linux paths.
   - Spawns the background FastAPI gateway if offline (`ensure_server_running`).
@@ -228,7 +228,7 @@ sequenceDiagram
 
 ---
 
-### 4. [`server/socket_server.py`](file:///c:/Users/20106/agent_bro_hands/server/socket_server.py)
+### 4. [`server/socket_server.py`](../server/socket_server.py)
 - **When It Runs:** Runs continuously as a background FastAPI web server on port `8000`.
 - **Usage:**
   - Hosts the bidirectional WebSocket endpoint (`/ws/extension`) that the Chrome Extension connects to.
@@ -239,14 +239,14 @@ sequenceDiagram
 
 ---
 
-### 5. [`server/socket_mcp.py`](file:///c:/Users/20106/agent_bro_hands/server/socket_mcp.py)
+### 5. [`server/socket_mcp.py`](../server/socket_mcp.py)
 - **When It Runs:** Launched by AI coding environments (Claude Code, Antigravity IDE, Cursor) as a long-running stdio MCP subprocess.
 - **Usage:** Exposes 12 standard Model Context Protocol tools (`socket_execute`, `socket_status`, `socket_release_takeover`, `socket_query_history`, `socket_list_subskills`, `socket_borrow_subskill`, etc.).
 - **System Importance:** **Agent Interface.** The sole bridge enabling AI agents to autonomously control the browser, query past session memory, and borrow reusable skills using native tool calling.
 
 ---
 
-### 6. [`server/browser_socket.py`](file:///c:/Users/20106/agent_bro_hands/server/browser_socket.py)
+### 6. [`server/browser_socket.py`](../server/browser_socket.py)
 - **When It Runs:** Invoked as a direct CLI alias.
 - **Usage:** Re-exports and runs `socket_launcher.main()`.
 - **System Importance:** Ergonomic entrypoint alias for quick shell interaction.
@@ -255,7 +255,7 @@ sequenceDiagram
 
 ## 🗄️ Category 2: Modular Session Subsystem (`server/session/`)
 
-### 7. [`server/session/storage.py`](file:///c:/Users/20106/agent_bro_hands/server/session/storage.py)
+### 7. [`server/session/storage.py`](../server/session/storage.py)
 - **When It Runs:** Whenever sessions are created, queried, or finalized.
 - **Usage:**
   - Performs atomic disk reads and writes for monthly `index.json` and `subskills_index.json` (writes to temp file, then renames in-place).
@@ -265,7 +265,7 @@ sequenceDiagram
 
 ---
 
-### 8. [`server/session/formatter.py`](file:///c:/Users/20106/agent_bro_hands/server/session/formatter.py)
+### 8. [`server/session/formatter.py`](../server/session/formatter.py)
 - **When It Runs:** When displaying session logs, CLI tables, or rendering `SESSION_DOCUMENT.md`.
 - **Usage:**
   - Renders the chronological ASCII timeline tree (`format_session_thread`) showing relative timestamps `(T+SS.Ss)`, action icons, and latencies.
@@ -274,14 +274,14 @@ sequenceDiagram
 
 ---
 
-### 9. [`server/session/documenter.py`](file:///c:/Users/20106/agent_bro_hands/server/session/documenter.py)
+### 9. [`server/session/documenter.py`](../server/session/documenter.py)
 - **When It Runs:** When a session is finalized (`TASK_COMPLETE`, `STOPPED`, `ABORTED`) or when requested via `/session/document`.
 - **Usage:** Compiles an all-in-one Markdown document (`SESSION_DOCUMENT.md`) containing executive metadata, playbook rules (`sub_skill.md`), file inventories, and full chronological ASCII threads. Also exports master history reports.
 - **System Importance:** **Session Deliverable Compiler.** Generates permanent, self-contained documentation for every browser automation run.
 
 ---
 
-### 10. [`server/session/manager.py`](file:///c:/Users/20106/agent_bro_hands/server/session/manager.py)
+### 10. [`server/session/manager.py`](../server/session/manager.py)
 - **When It Runs:** Continuously manages active session objects in memory (`ActiveSession`).
 - **Usage:**
   - Allocates date-partitioned session folders (`server/logs/YYYY-MM-DD/<Title>_<time>_gid<id>/`).
@@ -293,7 +293,7 @@ sequenceDiagram
 
 ---
 
-### 11. [`server/session/__init__.py`](file:///c:/Users/20106/agent_bro_hands/server/session/__init__.py) & [`server/session_manager.py`](file:///c:/Users/20106/agent_bro_hands/server/session_manager.py)
+### 11. [`server/session/__init__.py`](../server/session/__init__.py) & [`server/session_manager.py`](../server/session_manager.py)
 - **When It Runs:** On import from other packages.
 - **Usage:** `server/session/__init__.py` exposes clean module exports. `server/session_manager.py` acts as a backward-compatible shim re-exporting everything so legacy imports continue working without changes.
 - **System Importance:** Preserves backward compatibility across the entire repository.
@@ -306,34 +306,34 @@ These 8 tools are **automatically cloned into `<session_dir>/adhocs/`** whenever
 
 | Tool File | When It Runs | Core Purpose | Importance |
 |:---|:---|:---|:---|
-| **[`navigate.py`](file:///c:/Users/20106/agent_bro_hands/server/templates/adhocs/navigate.py)** | Called by agent/scripts to open URLs | Normalizes URLs, binds to session tab group, tracks navigation latency | Basic navigation primitive with standard exit codes |
-| **[`write_input.py`](file:///c:/Users/20106/agent_bro_hands/server/templates/adhocs/write_input.py)** | Called to type into inputs / textareas | Locates element (CSS/XPath), scrolls, focuses, triggers full event cycle (`keydown`, `input`, `keyup`, `change`), optional Enter & blur | Native DOM input simulation bypassing synthetic event traps |
-| **[`type_input.py`](file:///c:/Users/20106/agent_bro_hands/server/templates/adhocs/type_input.py)** | Alias for `write_input.py` | Forwards execution to `write_input.py` | Ergonomic command alias |
-| **[`click_element.py`](file:///c:/Users/20106/agent_bro_hands/server/templates/adhocs/click_element.py)** | Called to click buttons/links | Centers element in view, dispatches `mousedown` -> `mouseup` -> `click` | Robust clicking primitive |
-| **[`extract_text.py`](file:///c:/Users/20106/agent_bro_hands/server/templates/adhocs/extract_text.py)** | Called to scrape text or attributes | Extracts text content or specific attributes (`href`, `src`, `data-*`) from single or multiple matching nodes | Clean data extraction without writing ad-hoc JS |
-| **[`scroll_page.py`](file:///c:/Users/20106/agent_bro_hands/server/templates/adhocs/scroll_page.py)** | Called to paginate feeds or reach page ends | Smooth directional scrolling (`down`, `up`, `top`, `bottom`) with repeat intervals and bottom detection | Feed pagination & infinite scroll handling |
-| **[`eval_js.py`](file:///c:/Users/20106/agent_bro_hands/server/templates/adhocs/eval_js.py)** | Called for complex page evaluations | Executes arbitrary JS strings or script files via CDP | Flexible execution fallback |
-| **[`take_screenshot.py`](file:///c:/Users/20106/agent_bro_hands/server/templates/adhocs/take_screenshot.py)** | Called to record visual checkpoints | Captures viewport or element snapshots into `artifacts/` | Visual state verification |
+| **[`navigate.py`](../server/templates/adhocs/navigate.py)** | Called by agent/scripts to open URLs | Normalizes URLs, binds to session tab group, tracks navigation latency | Basic navigation primitive with standard exit codes |
+| **[`write_input.py`](../server/templates/adhocs/write_input.py)** | Called to type into inputs / textareas | Locates element (CSS/XPath), scrolls, focuses, triggers full event cycle (`keydown`, `input`, `keyup`, `change`), optional Enter & blur | Native DOM input simulation bypassing synthetic event traps |
+| **[`type_input.py`](../server/templates/adhocs/type_input.py)** | Alias for `write_input.py` | Forwards execution to `write_input.py` | Ergonomic command alias |
+| **[`click_element.py`](../server/templates/adhocs/click_element.py)** | Called to click buttons/links | Centers element in view, dispatches `mousedown` -> `mouseup` -> `click` | Robust clicking primitive |
+| **[`extract_text.py`](../server/templates/adhocs/extract_text.py)** | Called to scrape text or attributes | Extracts text content or specific attributes (`href`, `src`, `data-*`) from single or multiple matching nodes | Clean data extraction without writing ad-hoc JS |
+| **[`scroll_page.py`](../server/templates/adhocs/scroll_page.py)** | Called to paginate feeds or reach page ends | Smooth directional scrolling (`down`, `up`, `top`, `bottom`) with repeat intervals and bottom detection | Feed pagination & infinite scroll handling |
+| **[`eval_js.py`](../server/templates/adhocs/eval_js.py)** | Called for complex page evaluations | Executes arbitrary JS strings or script files via CDP | Flexible execution fallback |
+| **[`take_screenshot.py`](../server/templates/adhocs/take_screenshot.py)** | Called to record visual checkpoints | Captures viewport or element snapshots into `artifacts/` | Visual state verification |
 
 ---
 
 ## 🧩 Category 4: Chrome Extension Subsystem (`extension/`)
 
-### 12. [`extension/manifest.json`](file:///c:/Users/20106/agent_bro_hands/extension/manifest.json)
+### 12. [`extension/manifest.json`](../extension/manifest.json)
 - **When It Runs:** Read by Chrome when the extension is loaded.
 - **Usage:** Configures Manifest V3 settings, background service worker, content scripts, permissions (`debugger`, `tabGroups`, `storage`, `notifications`, `alarms`), and host permissions (`<all_urls>`).
 - **System Importance:** Required entrypoint for Chrome to load and execute the extension.
 
 ---
 
-### 13. [`extension/protocol.js`](file:///c:/Users/20106/agent_bro_hands/extension/protocol.js)
+### 13. [`extension/protocol.js`](../extension/protocol.js)
 - **When It Runs:** Loaded by the background service worker, injected content scripts, and Node.js test suites (Universal Module Definition).
 - **Usage:** Defines frozen protocol constants (`MessageTypes`, `ActionTypes`, `ResponseStatus`, `ErrorCodes`) and uniform envelope factories (`createResponseEnvelope`, `createErrorEnvelope`).
 - **System Importance:** Single source of truth for message passing between Chrome and Python.
 
 ---
 
-### 14. [`extension/background.js`](file:///c:/Users/20106/agent_bro_hands/extension/background.js)
+### 14. [`extension/background.js`](../extension/background.js)
 - **When It Runs:** Runs as a Manifest V3 Service Worker in the browser background.
 - **Usage:**
   - Maintains the `ResilientSocket` WebSocket connection to the gateway server (`ws://127.0.0.1:8000/ws/extension`).
@@ -345,7 +345,7 @@ These 8 tools are **automatically cloned into `<session_dir>/adhocs/`** whenever
 
 ---
 
-### 15. [`extension/content.js`](file:///c:/Users/20106/agent_bro_hands/extension/content.js)
+### 15. [`extension/content.js`](../extension/content.js)
 - **When It Runs:** Automatically injected into every web page upon load.
 - **Usage:**
   - Mounts an isolated Shadow DOM container (`<agentsocket-hud-host>`).
@@ -356,7 +356,7 @@ These 8 tools are **automatically cloned into `<session_dir>/adhocs/`** whenever
 
 ---
 
-### 16. [`extension/popup.html`](file:///c:/Users/20106/agent_bro_hands/extension/popup.html) & [`extension/popup.js`](file:///c:/Users/20106/agent_bro_hands/extension/popup.js)
+### 16. [`extension/popup.html`](../extension/popup.html) & [`extension/popup.js`](../extension/popup.js)
 - **When It Runs:** When the user clicks the extension icon in the Chrome toolbar.
 - **Usage:**
   - Displays live server connection lights (🟢 Online, 🔴 Offline, ⚫ Disabled).
@@ -367,7 +367,7 @@ These 8 tools are **automatically cloned into `<session_dir>/adhocs/`** whenever
 
 ---
 
-### 17. [`extension/auth.html`](file:///c:/Users/20106/agent_bro_hands/extension/auth.html) & [`extension/auth.js`](file:///c:/Users/20106/agent_bro_hands/extension/auth.js)
+### 17. [`extension/auth.html`](../extension/auth.html) & [`extension/auth.js`](../extension/auth.js)
 - **When It Runs:** Automatically opens in a tab when an agent attempts browser automation for the first time.
 - **Usage:** Displays a security consent dialog asking the user to **Grant** or **Deny** local browser automation access.
 - **System Importance:** Security gatekeeper preventing unauthorized automation without explicit user consent.
@@ -380,14 +380,14 @@ All 49 unit and integration tests execute on `python -m unittest discover -s tes
 
 | Test File | Verified Modules | Primary Coverage |
 |:---|:---|:---|
-| **[`tests/test_logger.py`](file:///c:/Users/20106/agent_bro_hands/tests/test_logger.py)** | `server/logger.py` | Verifies logger naming, `sys.stderr` StreamHandler routing, log level overrides |
-| **[`tests/test_models.py`](file:///c:/Users/20106/agent_bro_hands/tests/test_models.py)** | `server/models.py` | Schema validation, PEP 604 typing, Pydantic defaults, response envelopes |
-| **[`tests/test_session_manager.py`](file:///c:/Users/20106/agent_bro_hands/tests/test_session_manager.py)** | `server/session/` | Date partitioning, 10KB threshold offload, inactivity timeout, disconnect abort, ASCII timelines |
-| **[`tests/test_subskills.py`](file:///c:/Users/20106/agent_bro_hands/tests/test_subskills.py)** | `server/session/` | Subskill directory structure (`input/`, `output/`, `adhocs/`, `artifacts/`), borrowing engine, `SESSION_DOCUMENT.md` |
-| **[`tests/test_server.py`](file:///c:/Users/20106/agent_bro_hands/tests/test_server.py)** | `server/socket_server.py` | REST/WS endpoints, privacy guardrails, sensitive keyword triggers, human release handoff |
-| **[`tests/test_launcher.py`](file:///c:/Users/20106/agent_bro_hands/tests/test_launcher.py)** | `server/socket_launcher.py` | Chrome detection, PID tracking, bitmask constants, declarative CLI parser |
-| **[`tests/test_adhocs.py`](file:///c:/Users/20106/agent_bro_hands/tests/test_adhocs.py)** | `server/templates/adhocs/` | Verifies existence of all 8 standard tools, CLI `--help` flags, auto-seeding engine |
-| **[`tests/test_protocol.test.js`](file:///c:/Users/20106/agent_bro_hands/tests/test_protocol.test.js)** | `extension/protocol.js` | JavaScript UMD module, message types, action types, response envelopes |
+| **[`tests/test_logger.py`](../tests/test_logger.py)** | `server/logger.py` | Verifies logger naming, `sys.stderr` StreamHandler routing, log level overrides |
+| **[`tests/test_models.py`](../tests/test_models.py)** | `server/models.py` | Schema validation, PEP 604 typing, Pydantic defaults, response envelopes |
+| **[`tests/test_session_manager.py`](../tests/test_session_manager.py)** | `server/session/` | Date partitioning, 10KB threshold offload, inactivity timeout, disconnect abort, ASCII timelines |
+| **[`tests/test_subskills.py`](../tests/test_subskills.py)** | `server/session/` | Subskill directory structure (`input/`, `output/`, `adhocs/`, `artifacts/`), borrowing engine, `SESSION_DOCUMENT.md` |
+| **[`tests/test_server.py`](../tests/test_server.py)** | `server/socket_server.py` | REST/WS endpoints, privacy guardrails, sensitive keyword triggers, human release handoff |
+| **[`tests/test_launcher.py`](../tests/test_launcher.py)** | `server/socket_launcher.py` | Chrome detection, PID tracking, bitmask constants, declarative CLI parser |
+| **[`tests/test_adhocs.py`](../tests/test_adhocs.py)** | `server/templates/adhocs/` | Verifies existence of all 8 standard tools, CLI `--help` flags, auto-seeding engine |
+| **[`tests/test_protocol.test.js`](../tests/test_protocol.test.js)** | `extension/protocol.js` | JavaScript UMD module, message types, action types, response envelopes |
 
 ---
 
@@ -461,7 +461,7 @@ WS   /ws/extension       -> Bidirectional WebSocket connection with Chrome exten
 ---
 
 ## 5.4 Progress HUD & Atomic Step Tracking Engine
-* **Specification Document:** [`specs/17_session_hud_progress_group_lifecycle_and_glow_cleanup_spec.md`](file:///c:/Users/20106/agent_bro_hands/specs/17_session_hud_progress_group_lifecycle_and_glow_cleanup_spec.md)
+* **Specification Document:** [`specs/17_session_hud_progress_group_lifecycle_and_glow_cleanup_spec.md`](../specs/17_session_hud_progress_group_lifecycle_and_glow_cleanup_spec.md)
 * **Purpose:** Real-time situational awareness for human operators and deterministic task progress tracking for AI agents.
 * **On-Disk Source:** `input/implementation_plan.md` (Checklist schema `- [ ] **Step N**`).
 * **Formula:** $\text{Progress \%} = (\text{Completed Steps} / \text{Total Steps}) \times 100$.

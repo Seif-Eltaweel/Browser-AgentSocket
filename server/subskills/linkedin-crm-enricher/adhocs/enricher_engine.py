@@ -18,7 +18,8 @@ if hasattr(sys.stdout, "reconfigure"):
 SERVER_URL = "http://127.0.0.1:8000"
 INPUT_CSV = r"batch_3_input.csv"
 OUTPUT_CSV = r"batch_3_enriched.csv"
-DOWNLOADS_CSV = r"C:\Users\20106\Downloads\Raw_Batchs\batch_3.csv"
+DEFAULT_DOWNLOADS = os.path.join(os.path.expanduser("~"), "Downloads", "Raw_Batchs", "batch_3.csv")
+DOWNLOADS_CSV = os.environ.get("AGENTSOCKET_ENRICHER_CSV", DEFAULT_DOWNLOADS)
 
 STUDENT_KEYWORDS = [
     "student", "intern", "undergraduate", "b.sc. candidate", "bsc candidate",

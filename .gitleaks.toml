@@ -1,0 +1,22 @@
+# Gitleaks Configuration for AgentSocket
+[extend]
+useDefault = true
+
+[rules]
+# Allow standard synthetic placeholders in test files
+[[rules]]
+id = "agentsocket-test-redaction-allowlist"
+description = "Allow mock redaction placeholders"
+regex = '''\[REDACTED\]'''
+
+[whitelist]
+paths = [
+  '''tests/.*''',
+  '''\.git/.*''',
+]
+
+[allowlist]
+paths = [
+  '''tests/.*''',
+  '''\.git/.*''',
+]

@@ -130,92 +130,115 @@ class ResilientSocket {
         if (this.isDisposed) return;
         console.log(`[Hub] Connecting to ${this.server.name} at ${this.server.url}...`);
 
-        try {
-            let wsUrl = this.server.url;
-            if (this.server.token && !wsUrl.includes("token=")) {
-                const sep = wsUrl.includes("?") ? "&" : "?";
-                wsUrl = `${wsUrl}${sep}token=${encodeURIComponent(this.server.token)}`;
-            }
-            this.ws = new WebSocket(wsUrl);
-        } catch (err) {
-            console.warn(`[Hub] WebSocket init error for ${this.server.name}:`, err);
-            this.scheduleReconnect();
-            return;
-        }
+        chrome.storage.local.get(["gateway_token"], async (data) => {
+            if (this.isDisposed) return;
+            let token = (data && data.gateway_token) || this.server.token;
 
-        this.ws.onopen = () => {
-            console.log(`[Hub] Successfully connected to ${this.server.name}`);
-            this.retryCount = 0;
-            authorizedSessions.clear();
-            if (this.isOpen()) {
-                this.send({
-                    type: MT.STATE_CHANGE,
-                    human_in_control: humanInControl,
-                    notes: "",
-                    agent_name: this.server.name,
-                    group_color: this.server.color || "purple"
-                });
+            // Spec 35: If token is missing for local loopback gateway, attempt auto-bootstrap via localhost loopback
+            if (!token && (this.server.url.includes("127.0.0.1:8000") || this.server.url.includes("localhost:8000"))) {
+                try {
+                    const res = await fetch("http://127.0.0.1:8000/api/token");
+                    if (res.ok) {
+                        const tokenData = await res.json();
+                        if (tokenData && tokenData.token) {
+                            token = tokenData.token;
+                            chrome.storage.local.set({ gateway_token: token });
+                        }
+                    }
+                } catch (e) {
+                    // Gateway offline or inaccessible
+                }
             }
-        };
 
-        this.ws.onmessage = async (event) => {
+            if (this.isDisposed) return;
+
             try {
-                const data = JSON.parse(event.data);
-                if (data.type === MT.EXECUTE_ACTION) {
-                    await this.onAction(this.server, data, this);
-                } else if (data.type === MT.OBSERVE_PAGE || data.type === "observe_page") {
-                    const result = await handleObservePage(data, data.session_title);
-                    this.send({
-                        type: MT.OBSERVE_RESPONSE,
-                        command_id: data.id || data.command_id || data.request_id,
-                        request_id: data.request_id || data.id || data.command_id,
-                        payload: result
-                    });
-                } else if (data.type === MT.ACT_ELEMENT || data.type === "act_element") {
-                    const result = await handleActElement(data, data.session_title);
-                    this.send({
-                        type: MT.ACT_RESPONSE,
-                        command_id: data.id || data.command_id || data.request_id,
-                        request_id: data.request_id || data.id || data.command_id,
-                        payload: result
-                    });
-                } else if (data.type === MT.SET_INTENT || data.type === "set_intent") {
-                    await forwardIntentToTabs(data);
-                } else if (data.type === MT.STATE_SYNC) {
-                    this.onStateSync(this.server, data);
-                } else if (data.type === MT.UPDATE_PROGRESS) {
-                    await forwardProgressToTabs(data);
-                } else if (data.type === MT.SET_PLAN || data.type === "set_plan") {
-                    await handleSetPlan(data);
-                } else if (data.type === MT.SET_MILESTONE || data.type === "set_milestone") {
-                    await handleSetMilestone(data);
-                } else if (data.type === MT.HIDE_GLOW || data.type === "hide_glow") {
-                    await hideAllGlows();
-                } else if (data.type === "clear_badges") {
-                    await clearAllBadges();
+                let wsUrl = this.server.url;
+                if (token && !wsUrl.includes("token=")) {
+                    const sep = wsUrl.includes("?") ? "&" : "?";
+                    wsUrl = `${wsUrl}${sep}token=${encodeURIComponent(token)}`;
                 }
+                this.ws = new WebSocket(wsUrl);
             } catch (err) {
-                console.error(`[Hub] Error processing message from ${this.server.name}:`, err);
-            }
-        };
-
-        this.ws.onclose = () => {
-            const anyOpen = Object.values(activeSockets).some(s => s && s.isOpen && s.isOpen());
-            if (!anyOpen) {
-                hideAllGlows();
-                for (const [title, sess] of activeSessions.entries()) {
-                    sess.active = false;
-                }
-                saveActiveSessions();
-            }
-            if (!this.isDisposed) {
+                console.warn(`[Hub] WebSocket init error for ${this.server.name}:`, err);
                 this.scheduleReconnect();
+                return;
             }
-        };
 
-        this.ws.onerror = () => {
-            // Suppress noisy console logs on closed / offline optional servers
-        };
+            this.ws.onopen = () => {
+                console.log(`[Hub] Successfully connected to ${this.server.name}`);
+                this.retryCount = 0;
+                authorizedSessions.clear();
+                if (this.isOpen()) {
+                    this.send({
+                        type: MT.STATE_CHANGE,
+                        human_in_control: humanInControl,
+                        notes: "",
+                        agent_name: this.server.name,
+                        group_color: this.server.color || "purple"
+                    });
+                }
+            };
+
+            this.ws.onmessage = async (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.type === MT.EXECUTE_ACTION) {
+                        await this.onAction(this.server, data, this);
+                    } else if (data.type === MT.OBSERVE_PAGE || data.type === "observe_page") {
+                        const result = await handleObservePage(data, data.session_title);
+                        this.send({
+                            type: MT.OBSERVE_RESPONSE,
+                            command_id: data.id || data.command_id || data.request_id,
+                            request_id: data.request_id || data.id || data.command_id,
+                            payload: result
+                        });
+                    } else if (data.type === MT.ACT_ELEMENT || data.type === "act_element") {
+                        const result = await handleActElement(data, data.session_title);
+                        this.send({
+                            type: MT.ACT_RESPONSE,
+                            command_id: data.id || data.command_id || data.request_id,
+                            request_id: data.request_id || data.id || data.command_id,
+                            payload: result
+                        });
+                    } else if (data.type === MT.SET_INTENT || data.type === "set_intent") {
+                        await forwardIntentToTabs(data);
+                    } else if (data.type === MT.STATE_SYNC) {
+                        this.onStateSync(this.server, data);
+                    } else if (data.type === MT.UPDATE_PROGRESS) {
+                        await forwardProgressToTabs(data);
+                    } else if (data.type === MT.SET_PLAN || data.type === "set_plan") {
+                        await handleSetPlan(data);
+                    } else if (data.type === MT.SET_MILESTONE || data.type === "set_milestone") {
+                        await handleSetMilestone(data);
+                    } else if (data.type === MT.HIDE_GLOW || data.type === "hide_glow") {
+                        await hideAllGlows();
+                    } else if (data.type === "clear_badges") {
+                        await clearAllBadges();
+                    }
+                } catch (err) {
+                    console.error(`[Hub] Error processing message from ${this.server.name}:`, err);
+                }
+            };
+
+            this.ws.onclose = () => {
+                const anyOpen = Object.values(activeSockets).some(s => s && s.isOpen && s.isOpen());
+                if (!anyOpen) {
+                    hideAllGlows();
+                    for (const [title, sess] of activeSessions.entries()) {
+                        sess.active = false;
+                    }
+                    saveActiveSessions();
+                }
+                if (!this.isDisposed) {
+                    this.scheduleReconnect();
+                }
+            };
+
+            this.ws.onerror = () => {
+                // Suppress noisy console logs on closed / offline optional servers
+            };
+        });
     }
 
     scheduleReconnect() {
@@ -478,6 +501,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             if (isAuthed) {
                 authorizedSessions.add(sessionTitle);
                 sessionPermissions.set(sessionTitle, perms);
+                if (token) {
+                    chrome.storage.local.set({ gateway_token: token });
+                }
             } else {
                 authorizedSessions.delete(sessionTitle);
                 sessionPermissions.delete(sessionTitle);

@@ -196,7 +196,7 @@ python server/socket_launcher.py subskills borrow github-metrics-extractor \
 
 ## 4. Extending FastMCP Tools
 
-The Model Context Protocol (MCP) server is located in [`server/socket_mcp.py`](file:///c:/Users/20106/agent_bro_hands/server/socket_mcp.py).
+The Model Context Protocol (MCP) server is located in [`server/socket_mcp.py`](server/socket_mcp.py).
 
 To add a new tool for your AI agents, use the `@server.tool()` decorator:
 
