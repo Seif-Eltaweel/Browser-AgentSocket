@@ -33,8 +33,8 @@ This document provides in-depth installation, configuration, containerization, a
 #### Installation Commands
 ```powershell
 # Clone repository
-git clone https://github.com/Seif-Eltaweel/agentsocket-browser.git
-cd agentsocket-browser
+git clone https://github.com/Seif-Eltaweel/Browser-AgentSocket.git
+cd Browser-AgentSocket
 
 # Create virtual environment
 python -m venv .venv
@@ -60,8 +60,8 @@ pip install -r requirements.txt
 #### Installation Commands
 ```bash
 # Clone repository
-git clone https://github.com/Seif-Eltaweel/agentsocket-browser.git
-cd agentsocket-browser
+git clone https://github.com/Seif-Eltaweel/Browser-AgentSocket.git
+cd Browser-AgentSocket
 
 # Create virtual environment
 python3 -m venv .venv
@@ -87,8 +87,8 @@ sudo dnf install -y python3 python3-pip git google-chrome-stable
 
 #### Installation Commands
 ```bash
-git clone https://github.com/Seif-Eltaweel/agentsocket-browser.git
-cd agentsocket-browser
+git clone https://github.com/Seif-Eltaweel/Browser-AgentSocket.git
+cd Browser-AgentSocket
 
 python3 -m venv .venv
 source .venv/bin/activate

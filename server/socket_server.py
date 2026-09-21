@@ -344,6 +344,10 @@ async def verify_gateway_token(request: Request, call_next):
     if request.url.path in ["/auth.html", "/api/token", "/health"] and is_loopback:
         return await call_next(request)
 
+    # Retired endpoints bypass auth to immediately return HTTP 410 Gone migration guidance (Spec 38)
+    if request.url.path in ["/adhocs/run", "/adhocs/resolve"]:
+        return await call_next(request)
+
     origin = request.headers.get("origin") or ""
     is_extension = origin.startswith("chrome-extension://")
 
@@ -667,18 +671,40 @@ def promote_adhoc(payload: PromoteAdhocPayload) -> dict[str, Any]:
 
 
 @app.get("/adhocs/resolve")
-def resolve_adhoc(tool_name: str, session_path: str | None = None) -> dict[str, Any]:
+def resolve_adhoc(tool_name: str, session_path: str | None = None) -> JSONResponse:
+    """Deprecated endpoint (Spec 38). Direct callers to atomic OODA tools."""
     state.record_activity()
-    return session_manager.resolve_adhoc(tool_name=tool_name, session_dir_or_path=session_path)
+    return JSONResponse(
+        status_code=410,
+        content={
+            "status": "deprecated",
+            "error": {
+                "code": "ENDPOINT_RETIRED",
+                "message": (
+                    "Adhoc Python resolution is retired. Use atomic FastMCP OODA tools instead: "
+                    "browser_observe, browser_click, browser_type, browser_scroll, browser_key_press."
+                ),
+            },
+        },
+    )
 
 
 @app.post("/adhocs/run")
-def run_adhoc(payload: RunAdhocPayload) -> dict[str, Any]:
+def run_adhoc(payload: RunAdhocPayload) -> JSONResponse:
+    """Deprecated endpoint (Spec 38). Direct callers to atomic OODA tools."""
     state.record_activity()
-    return session_manager.run_adhoc(
-        tool_name=payload.tool_name,
-        session_dir_or_path=payload.session_path,
-        args=payload.args,
+    return JSONResponse(
+        status_code=410,
+        content={
+            "status": "deprecated",
+            "error": {
+                "code": "ENDPOINT_RETIRED",
+                "message": (
+                    "Adhoc Python execution is retired. Use atomic FastMCP OODA tools instead: "
+                    "browser_observe, browser_click, browser_type, browser_scroll, browser_key_press."
+                ),
+            },
+        },
     )
 
 

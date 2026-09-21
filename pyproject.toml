@@ -48,6 +48,12 @@ dev = [
 agentsocket = "server.socket_launcher:main"
 browser-socket = "server.socket_launcher:main"
 
+[project.urls]
+Homepage = "https://github.com/Seif-Eltaweel/Browser-AgentSocket"
+Repository = "https://github.com/Seif-Eltaweel/Browser-AgentSocket"
+Issues = "https://github.com/Seif-Eltaweel/Browser-AgentSocket/issues"
+Documentation = "https://github.com/Seif-Eltaweel/Browser-AgentSocket#readme"
+
 [tool.hatch.build.targets.wheel]
 packages = ["server"]
 

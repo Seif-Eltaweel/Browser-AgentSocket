@@ -1,6 +1,6 @@
 # 🤝 Contributing to AgentSocket-Browser
 
-[![CI Pipeline](https://github.com/Seif-Eltaweel/agent_bro_hands/actions/workflows/ci.yml/badge.svg)](https://github.com/Seif-Eltaweel/agent_bro_hands/actions/workflows/ci.yml)
+[![CI Pipeline](https://github.com/Seif-Eltaweel/Browser-AgentSocket/actions/workflows/ci.yml/badge.svg)](https://github.com/Seif-Eltaweel/Browser-AgentSocket/actions/workflows/ci.yml)
 
 Thank you for your interest in contributing to **AgentSocket-Browser**! We are committed to building a secure, high-performance, human-in-the-loop browser automation bridge for the AI agent ecosystem.
 
@@ -26,8 +26,8 @@ Follow these steps to set up your local development environment:
 
 ```bash
 # 1. Fork and clone the repository
-git clone https://github.com/YOUR_USERNAME/agentsocket-browser.git
-cd agentsocket-browser
+git clone https://github.com/YOUR_USERNAME/Browser-AgentSocket.git
+cd Browser-AgentSocket
 
 # 2. Create and activate a virtual environment
 python -m venv .venv
@@ -37,8 +37,9 @@ python -m venv .venv
 # macOS / Linux
 source .venv/bin/activate
 
-# 3. Install core dependencies
-pip install -r requirements.txt
+# 3. Install in editable mode with development dependencies
+pip install -e ".[dev]"
+# or: pip install -r requirements.txt
 
 # 4. Load the unpacked extension in Chrome
 # Navigate to chrome://extensions, enable "Developer mode", click "Load unpacked", and select extension/
@@ -95,7 +96,7 @@ Every Pull Request must pass 100% of the CI verification matrix across Ubuntu, W
 # 1. Run Ruff linter and code quality checks
 ruff check server tests
 
-# 2. Run complete Python cross-platform test suite (162+ tests)
+# 2. Run complete Python cross-platform test suite (171+ tests)
 python -m unittest discover tests
 
 # 3. Run all 5 Chrome Extension JavaScript test suites (Node.js 20+)

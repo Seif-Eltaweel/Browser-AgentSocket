@@ -1,6 +1,12 @@
-"""
-AgentSocket - Model Context Protocol (MCP) Server
+"""AgentSocket - Model Context Protocol (MCP) Server.
+
 Exposes browser automation and human-in-the-loop socket tools over stdio for MCP clients.
+
+Note on Deprecations (Spec 33 / Spec 38):
+Standalone adhoc execution tools (`socket_run_adhoc`, `socket_promote_adhoc`, and
+`socket_list_adhocs`) are retired and excluded from active MCP introspection. Agents
+must operate via atomic OODA tools (browser_observe, browser_click, browser_type,
+browser_scroll, browser_key_press).
 """
 
 from __future__ import annotations

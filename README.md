@@ -2,12 +2,13 @@
 
 **Autonomous Multi-Agent Browser Automation Gateway, FastMCP Server & Chrome MV3 Extension Bridge.**
 
-[![Python Version](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue.svg)](https://www.python.org/)
+[![Python Version](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
+[![CI Pipeline](https://github.com/Seif-Eltaweel/Browser-AgentSocket/actions/workflows/ci.yml/badge.svg)](https://github.com/Seif-Eltaweel/Browser-AgentSocket/actions/workflows/ci.yml)
 [![Chrome MV3](https://img.shields.io/badge/Chrome-Manifest%20V3-orange.svg)](extension/manifest.json)
 [![FastMCP](https://img.shields.io/badge/MCP-FastMCP%20Ready-purple.svg)](server/socket_mcp.py)
 [![Docker Support](https://img.shields.io/badge/Docker-Ready%20%28Xvfb%29-blue.svg)](Dockerfile)
-[![Test Suite](https://img.shields.io/badge/tests-44%2F44%20passing-brightgreen.svg)](tests/)
+[![Test Suite](https://img.shields.io/badge/tests-171%2F171%20passing-brightgreen.svg)](tests/)
 
 AgentSocket-Browser is a secure, human-in-the-loop browser automation bridge that connects autonomous AI agents (such as **Claude Code**, **Antigravity**, **Cursor**, **Windsurf**, or custom Python agents) directly to your active browser session. Operating through native **Model Context Protocol (MCP)** and WebSocket streams, it pairs zero-friction on-demand startup (`plug`) with strict safety guardrails, **Shadow DOM-isolated HUD**, viewport interaction shielding, tab group session isolation, and seamless human-agent takeover workflows.
 
@@ -145,14 +146,16 @@ server/logs/YYYY-MM-DD/<Session_Title>_<time>_gid<ID>/
 
 ### 1. Clone & Install Dependencies
 ```bash
-git clone https://github.com/Seif-Eltaweel/agentsocket-browser.git
-cd agentsocket-browser
+git clone https://github.com/Seif-Eltaweel/Browser-AgentSocket.git
+cd Browser-AgentSocket
 
 # Setup virtual environment
 python -m venv .venv
 # Windows: .\.venv\Scripts\Activate.ps1 | macOS/Linux: source .venv/bin/activate
 
-pip install -r requirements.txt
+# Install package in development mode
+pip install -e .
+# or: pip install -r requirements.txt
 ```
 
 ### 2. Load Chrome Extension
@@ -163,13 +166,14 @@ pip install -r requirements.txt
 ### 3. Verify with Smoke Test
 ```bash
 # 1. Boot gateway and verify connection
-python server/socket_launcher.py plug
+agentsocket plug
+# or: python -m server.socket_launcher plug
 
 # 2. Test navigation
-python server/socket_launcher.py navigate "https://example.com"
+agentsocket navigate "https://example.com"
 
 # 3. Test CDP JavaScript evaluation
-python server/socket_launcher.py eval "document.title"
+agentsocket eval "document.title"
 ```
 
 ---
@@ -183,16 +187,18 @@ Add AgentSocket-Browser to your AI agent's configuration:
 {
   "mcpServers": {
     "agentsocket": {
-      "command": "python",
-      "args": ["/ABSOLUTE/PATH/TO/agentsocket-browser/server/socket_mcp.py"]
+      "command": "agentsocket",
+      "args": ["mcp"]
     }
   }
 }
 ```
+*(Or with portable module execution: `command: "python", args: ["-m", "server.socket_mcp"]`)*
 
 ### Claude Code CLI
 ```bash
-claude mcp add agentsocket python /absolute/path/to/agentsocket-browser/server/socket_mcp.py
+claude mcp add agentsocket agentsocket mcp
+# or: claude mcp add agentsocket python -m server.socket_mcp
 ```
 
 ### Google Antigravity / Gemini CLI (`mcp_config.json`)
@@ -200,8 +206,8 @@ claude mcp add agentsocket python /absolute/path/to/agentsocket-browser/server/s
 {
   "mcpServers": {
     "agentsocket": {
-      "command": "python",
-      "args": ["/absolute/path/to/agentsocket-browser/server/socket_mcp.py"]
+      "command": "agentsocket",
+      "args": ["mcp"]
     }
   }
 }
@@ -211,7 +217,7 @@ claude mcp add agentsocket python /absolute/path/to/agentsocket-browser/server/s
 Add a new MCP server in **Settings -> MCP**:
 * **Name:** `agentsocket`
 * **Type:** `command`
-* **Command:** `python /absolute/path/to/agentsocket-browser/server/socket_mcp.py`
+* **Command:** `agentsocket mcp` (or `python -m server.socket_mcp`)
 
 ---
 

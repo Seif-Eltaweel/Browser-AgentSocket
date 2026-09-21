@@ -67,7 +67,7 @@ AgentSocket is a zero-latency, plug-and-play browser automation gateway and Mode
 # 2. Complete Repository File Structure & Inventory
 
 ```
-agent_bro_hands/
+agentsocket-browser/
 ├── .agents/
 │   └── skills/
 │       └── browser-socket/

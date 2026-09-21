@@ -146,6 +146,18 @@ Add AgentSocket to your client's MCP configuration (`claude_desktop_config.json`
 }
 ```
 
+Or when installed via pip (`pip install -e .`):
+```json
+{
+  "mcpServers": {
+    "browser-socket": {
+      "command": "agentsocket",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
 ### 1. Atomic Operator Tools (Primary OODA Driver)
 * `browser_observe`: Captures ARIA tree, assigns ephemeral numeric badges `[1]..[N]`, and returns structured DOM snapshot.
   * *Parameters*: `tab_group_id?: int`, `take_screenshot?: bool`
@@ -180,53 +192,56 @@ Add AgentSocket to your client's MCP configuration (`claude_desktop_config.json`
 * `socket_register_subskill`: Packages a completed session as a reusable SOP playbook in the central registry.
 
 ### 4. Retired Architecture (Spec 33)
-* Adhoc Script Execution: Permanently removed from the MCP tool registry. Standalone scraper scripts are forbidden; all browser automation MUST be driven turn-by-turn using atomic OODA tools.
+* Adhoc Script Execution: Permanently removed from the MCP tool registry (`socket_run_adhoc`, `socket_promote_adhoc`, `socket_list_adhocs`). Standalone scraper scripts are forbidden; all browser automation MUST be driven turn-by-turn using atomic OODA tools.
+* Gateway Endpoints `/adhocs/run` and `/adhocs/resolve`: Formally retired in Spec 38 (HTTP 410 Gone). Direct callers to atomic OODA tools.
 * `socket_execute`: Legacy single-shot action dispatcher. Prefer direct atomic tools (`browser_click`, `browser_type`, etc.) for page interactions.
 
 ---
 
-## 💻 CLI Usage (`/browser-socket`)
+## 💻 CLI Usage (`agentsocket` / `browser-socket`)
 
-You can also interact with AgentSocket directly via the CLI launcher:
+You can interact with AgentSocket directly via the console CLI launcher:
 
 ```bash
 # Check socket status
-python server/socket_launcher.py status
+agentsocket status
+# or: python -m server.socket_launcher status
 
 # Plug in: Ensure gateway & browser are booted and ready
-python server/socket_launcher.py plug
+agentsocket plug
+# or: browser-socket plug
 
 # Navigate to a URL
-python server/socket_launcher.py navigate "https://example.com"
+agentsocket navigate "https://example.com"
 
 # Execute JavaScript in active tab (diagnostic)
-python server/socket_launcher.py eval "document.title"
+agentsocket eval "document.title"
 
 # Release human lockout after manual action
-python server/socket_launcher.py release --notes "Logged in successfully"
+agentsocket release --notes "Logged in successfully"
 
 # Stop active tasks (unplug task)
-python server/socket_launcher.py stop
+agentsocket stop
 
 # Terminate gateway server background process
-python server/socket_launcher.py kill
+agentsocket kill
 
 # List past sessions history (SQLite indexed)
-python server/socket_launcher.py history --month 2026-08
+agentsocket history --month 2026-08
 
 # View chronological step timeline from session.jsonl
-python server/socket_launcher.py logs --path server/logs/2026-08-21/LinkedIn_CRM_Enricher_08-45_gid101
+agentsocket logs --path server/logs/2026-08-21/LinkedIn_CRM_Enricher_08-45_gid101
 
 # View or regenerate consolidated session document (SESSION_DOCUMENT.md)
-python server/socket_launcher.py doc --path server/logs/2026-08-21/LinkedIn_CRM_Enricher_08-45_gid101
+agentsocket doc --path server/logs/2026-08-21/LinkedIn_CRM_Enricher_08-45_gid101
 
 # Export unified master timeline report to Markdown
-python server/socket_launcher.py export-all --out ./ALL_SESSIONS_TIMELINE.md
+agentsocket export-all --out ./ALL_SESSIONS_TIMELINE.md
 
 # 📦 Subskills SOP Catalog
-python server/socket_launcher.py subskills list
-python server/socket_launcher.py subskills show example-sop
-python server/socket_launcher.py subskills borrow example-sop --title "Batch 1 Execution"
+agentsocket subskills list
+agentsocket subskills show example-sop
+agentsocket subskills borrow example-sop --title "Batch 1 Execution"
 ```
 
 ---
