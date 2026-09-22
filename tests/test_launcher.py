@@ -21,6 +21,9 @@ from server.socket_launcher import (
     query_history,
     get_session_details,
     get_session_artifact,
+    get_session_document,
+    get_session_thread,
+    build_cli_parser,
     export_all_timeline,
     print_history_table,
     print_session_logs,
@@ -69,6 +72,13 @@ class TestLauncher(unittest.TestCase):
         print_history_table([{"session_id": "sess_1", "tab_group_name": "Test", "status": "completed"}])
         print_session_logs({"status": "error", "message": "None"})
         print_session_logs({"status": "success", "events": [{"event_id": "evt_1", "type": "navigate", "duration_ms": 12.0, "title": "Test"}]})
+
+    def test_thread_cli_parser(self):
+        parser = build_cli_parser()
+        args = parser.parse_args(["thread", "--path", "server/logs/2026-08-21/dummy_session"])
+        self.assertEqual(args.command, "thread")
+        self.assertEqual(args.path, "server/logs/2026-08-21/dummy_session")
+        self.assertFalse(args.json)
 
 
 if __name__ == "__main__":

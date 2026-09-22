@@ -1,4 +1,4 @@
-// popup.js
+// popup.js - AgentSocket Extension Popup Configuration & State Controller
 const DEFAULT_SERVERS = [
     { id: "agentsocket_local", name: "AgentSocket Local (e.g. Claude, Hermes, Antigravity)", url: "ws://127.0.0.1:8000/ws/extension", enabled: true, color: "purple" },
     { id: "antigravity", name: "Antigravity Local", url: "ws://127.0.0.1:9000/ws/extension", enabled: false, color: "blue" },
@@ -16,7 +16,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const agentList = document.getElementById("agentList");
     const addServerBtn = document.getElementById("addServerBtn");
     const scanAgentsBtn = document.getElementById("scanAgentsBtn");
-    
+    const noServerAlert = document.getElementById("noServerAlert");
+
     const addServerForm = document.getElementById("addServerForm");
     const serverNameInput = document.getElementById("serverNameInput");
     const serverUrlInput = document.getElementById("serverUrlInput");
@@ -34,10 +35,10 @@ document.addEventListener("DOMContentLoaded", () => {
     let isHumanMode = false;
     let serverStatuses = {};
 
-    const MT = (typeof MessageTypes !== "undefined") ? MessageTypes : (window.BroProtocol ? window.BroProtocol.MessageTypes : {});
+    const MT = (typeof MessageTypes !== "undefined") ? MessageTypes : (window.AgentSocketProtocol ? window.AgentSocketProtocol.MessageTypes : {});
 
     // 1. Initial State Sync
-    chrome.runtime.sendMessage({ type: MT.GET_STATE || "get_state" }, (response) => {
+    chrome.runtime.sendMessage({ type: MT.GET_STATE }, (response) => {
         if (response) {
             updateUI(response.humanInControl);
         }
@@ -45,7 +46,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Listen for state changes pushed from background
     chrome.runtime.onMessage.addListener((message) => {
-        if (message.type === (MT.STATE_CHANGED || "state_changed")) {
+        if (message.type === MT.STATE_CHANGED) {
             updateUI(message.humanInControl);
         }
     });
@@ -58,7 +59,7 @@ document.addEventListener("DOMContentLoaded", () => {
             controlText.innerText = "Operator Active";
             controlText.style.color = "#ff7369";
             controlText.style.textShadow = "none";
-            
+
             actionBtn.innerText = "Return Control to Agent";
             actionBtn.className = "btn btn-resume";
             contextBox.classList.add("active");
@@ -68,7 +69,7 @@ document.addEventListener("DOMContentLoaded", () => {
             controlText.innerText = "Agent Active";
             controlText.style.color = "#4dab9a";
             controlText.style.textShadow = "none";
-            
+
             actionBtn.innerText = "Take Over Control";
             actionBtn.className = "btn btn-takeover";
             contextBox.classList.remove("active");
@@ -79,9 +80,9 @@ document.addEventListener("DOMContentLoaded", () => {
     // Toggle Mode Button Click handler
     actionBtn.addEventListener("click", () => {
         const notes = interventionNotes.value.trim();
-        chrome.runtime.sendMessage({ 
-            type: MT.TOGGLE_MODE || "toggle_mode", 
-            human_intervention_notes: notes 
+        chrome.runtime.sendMessage({
+            type: MT.TOGGLE_MODE,
+            human_intervention_notes: notes
         }, (response) => {
             if (response) {
                 updateUI(response.humanInControl);
@@ -92,27 +93,12 @@ document.addEventListener("DOMContentLoaded", () => {
     // ============================================================================
     // SERVER CONFIGURATION MANAGEMENT
     // ============================================================================
-
-    // Load and render servers
     function loadAndRenderServers() {
         chrome.storage.local.get(["agent_servers"], (data) => {
             let servers = data.agent_servers;
             if (!servers) {
                 servers = DEFAULT_SERVERS;
                 chrome.storage.local.set({ agent_servers: servers });
-            } else {
-                let migrated = false;
-                servers = servers.map(s => {
-                    if (s.id === "hermes") {
-                        s.id = "agentsocket_local";
-                        s.name = "AgentSocket Local (e.g. Claude, Hermes, Antigravity)";
-                        migrated = true;
-                    }
-                    return s;
-                });
-                if (migrated) {
-                    chrome.storage.local.set({ agent_servers: servers });
-                }
             }
             renderServersList(servers);
         });
@@ -124,7 +110,6 @@ document.addEventListener("DOMContentLoaded", () => {
             const item = document.createElement("div");
             item.className = "agent-item";
 
-            // Status indicator color
             let statusClass = "disabled";
             if (server.enabled) {
                 statusClass = serverStatuses[server.id] === "online" ? "online" : "offline";
@@ -136,8 +121,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 <div class="agent-info">
                   <div class="status-dot ${statusClass}" data-id="${server.id}"></div>
                   <div class="agent-text">
-                    <span class="agent-name">${server.name}</span>
-                    <span class="agent-url">${server.url}</span>
+                    <span class="agent-name">${escapeHtml(server.name)}</span>
+                    <span class="agent-url">${escapeHtml(server.url)}</span>
                   </div>
                 </div>
                 <div class="agent-actions">
@@ -156,14 +141,12 @@ document.addEventListener("DOMContentLoaded", () => {
                 </div>
             `;
 
-            // Setup color selection pre-selection and change handler
             const colorSelect = item.querySelector(".color-select");
             colorSelect.value = currentGroupColor;
             colorSelect.addEventListener("change", (e) => {
                 updateServerColor(server.id, e.target.value);
             });
 
-            // Listeners
             const toggleInput = item.querySelector("input[type='checkbox']");
             toggleInput.addEventListener("change", (e) => {
                 toggleServerEnabled(server.id, e.target.checked);
@@ -202,7 +185,7 @@ document.addEventListener("DOMContentLoaded", () => {
             });
             chrome.storage.local.set({ agent_servers: servers }, () => {
                 loadAndRenderServers();
-                chrome.runtime.sendMessage({ type: "reload_connections" });
+                chrome.runtime.sendMessage({ type: MT.RELOAD_CONNECTIONS });
             });
         });
     }
@@ -241,7 +224,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 addServerForm.style.display = "none";
                 serverNameInput.value = "";
                 serverUrlInput.value = "";
-                chrome.runtime.sendMessage({ type: MT.RELOAD_CONNECTIONS || "reload_connections" });
+                chrome.runtime.sendMessage({ type: MT.RELOAD_CONNECTIONS });
             });
         });
     });
@@ -250,7 +233,7 @@ document.addEventListener("DOMContentLoaded", () => {
     function showEditForm(server) {
         addServerForm.style.display = "none";
         editServerForm.style.display = "flex";
-        
+
         editServerId.value = server.id;
         editServerNameInput.value = server.name;
         editServerUrlInput.value = server.url;
@@ -280,7 +263,7 @@ document.addEventListener("DOMContentLoaded", () => {
             chrome.storage.local.set({ agent_servers: servers }, () => {
                 loadAndRenderServers();
                 editServerForm.style.display = "none";
-                chrome.runtime.sendMessage({ type: MT.RELOAD_CONNECTIONS || "reload_connections" });
+                chrome.runtime.sendMessage({ type: MT.RELOAD_CONNECTIONS });
             });
         });
     });
@@ -293,7 +276,7 @@ document.addEventListener("DOMContentLoaded", () => {
             chrome.storage.local.set({ agent_servers: servers }, () => {
                 loadAndRenderServers();
                 editServerForm.style.display = "none";
-                chrome.runtime.sendMessage({ type: MT.RELOAD_CONNECTIONS || "reload_connections" });
+                chrome.runtime.sendMessage({ type: MT.RELOAD_CONNECTIONS });
             });
         });
     });
@@ -303,25 +286,32 @@ document.addEventListener("DOMContentLoaded", () => {
         scanAgentsBtn.innerText = "Scanning ports...";
         scanAgentsBtn.disabled = true;
 
-        chrome.runtime.sendMessage({ type: MT.SCAN_LOCAL_AGENTS || "scan_local_agents" }, (response) => {
-            scanAgentsBtn.innerText = "🔍 Scan for Agents";
+        chrome.runtime.sendMessage({ type: MT.SCAN_LOCAL_AGENTS }, (response) => {
+            scanAgentsBtn.innerText = "🔍 Scan for Sockets";
             scanAgentsBtn.disabled = false;
-            
-            if (response && response.discoveredCount > 0) {
-                loadAndRenderServers();
+
+            const discovered = response ? (response.discoveredCount || 0) : 0;
+            const online = response ? (response.totalOnline || 0) : 0;
+
+            loadAndRenderServers();
+            pollConnectionStatuses();
+
+            if (discovered > 0 || online > 0) {
+                if (noServerAlert) noServerAlert.style.display = "none";
                 chrome.notifications.create({
                     type: 'basic',
                     iconUrl: chrome.runtime.getURL('icons/icon48.png'),
-                    title: 'Agents Discovered',
-                    message: `Successfully discovered and added ${response.discoveredCount} local agent servers!`,
+                    title: 'Sockets Discovered',
+                    message: `Discovered and connected to ${discovered > 0 ? discovered : online} active agent socket(s)!`,
                     priority: 1
                 });
             } else {
+                if (noServerAlert) noServerAlert.style.display = "block";
                 chrome.notifications.create({
                     type: 'basic',
                     iconUrl: chrome.runtime.getURL('icons/icon48.png'),
                     title: 'Scan Finished',
-                    message: 'No new local agent servers found on default ports.',
+                    message: 'No active AgentSocket server found on candidate ports [8000..9000].',
                     priority: 1
                 });
             }
@@ -330,31 +320,45 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Connection Poller: pulls active state from service worker
     function pollConnectionStatuses() {
-        chrome.runtime.sendMessage({ type: MT.GET_CONNECTION_STATUSES || "get_connection_statuses" }, (response) => {
+        chrome.runtime.sendMessage({ type: MT.GET_CONNECTION_STATUSES }, (response) => {
             if (response && response.statuses) {
                 serverStatuses = response.statuses;
-                
-                // Update indicator dots dynamically
+                let anyOnline = false;
+
                 document.querySelectorAll(".status-dot").forEach(dot => {
                     const id = dot.getAttribute("data-id");
                     const isEnabled = document.querySelector(`input[data-id="${id}"]`)?.checked;
-                    
-                    dot.className = "status-dot"; // reset
+
+                    dot.className = "status-dot";
                     if (isEnabled) {
                         const status = serverStatuses[id] === "online" ? "online" : "offline";
+                        if (status === "online") {
+                            anyOnline = true;
+                        }
                         dot.classList.add(status);
                     } else {
                         dot.classList.add("disabled");
                     }
                 });
+
+                if (noServerAlert) {
+                    noServerAlert.style.display = anyOnline ? "none" : "block";
+                }
             }
         });
     }
 
-    // Run layout render
+    function escapeHtml(str) {
+        if (!str) return "";
+        return str
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
+    }
+
     loadAndRenderServers();
     pollConnectionStatuses();
-    
-    // Poll every 1.5 seconds to refresh connection lights
     setInterval(pollConnectionStatuses, 1500);
 });

@@ -105,10 +105,181 @@
       color: var(--text-muted);
     }
 
+    .session-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      margin-bottom: 16px;
+      background: var(--bg-hover);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      font-size: 12px;
+      color: var(--text-main);
+      font-weight: 500;
+    }
+
+    .session-badge .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent-blue);
+    }
+
+    .token-container {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 8px 12px;
+      margin-bottom: 16px;
+      background: #141414;
+      border: 1px solid var(--border-subtle);
+      border-radius: 6px;
+      font-size: 11px;
+    }
+
+    .token-label {
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    .token-code {
+      font-family: monospace;
+      color: #38bdf8;
+      background: #1e293b;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 11px;
+      max-width: 220px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .permissions-container {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-bottom: 20px;
+      text-align: left;
+      background: var(--bg-hover);
+      padding: 12px;
+      border-radius: 6px;
+      border: 1px solid var(--border-subtle);
+    }
+
+    .perm-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    .perm-row input[type="checkbox"] {
+      margin-top: 2px;
+      cursor: pointer;
+      accent-color: var(--accent-blue);
+    }
+
+    .perm-label {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .perm-label strong {
+      color: var(--text-main);
+      font-size: 12px;
+    }
+
+    .perm-label small {
+      color: var(--text-muted);
+      font-size: 11px;
+    }
+
     .btn-deny:hover {
       background: var(--bg-hover);
       border-color: var(--border-hover);
       color: var(--text-main);
+    }
+
+    /* Spec 32: Planned Milestones Presentation Card */
+    .milestones-card {
+      background: #202020;
+      border: 1px solid #2e2e2e;
+      border-radius: 6px;
+      padding: 12px 14px;
+      margin: 0 0 16px 0;
+      text-align: left;
+    }
+
+    .milestones-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .milestones-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: #ffffff;
+      letter-spacing: -0.1px;
+    }
+
+    .milestones-icon {
+      font-size: 14px;
+      line-height: 1;
+    }
+
+    .milestones-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .milestone-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      font-size: 12px;
+      line-height: 1.4;
+      color: #e3e2de;
+    }
+
+    .milestone-badge {
+      color: #38bdf8;
+      font-family: monospace;
+      font-size: 11px;
+      font-weight: 600;
+      flex-shrink: 0;
+      padding: 1px 4px;
+      background: rgba(56, 189, 248, 0.1);
+      border-radius: 3px;
+    }
+
+    .milestone-text {
+      flex: 1;
+      word-break: break-word;
+    }
+
+    .milestone-fallback {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #9b9b9b;
+      font-size: 11.5px;
+      font-style: italic;
+      line-height: 1.4;
+      padding: 4px 0;
+    }
+
+    .milestone-fallback .fallback-icon {
+      color: #38bdf8;
+      font-style: normal;
+      font-size: 10px;
     }
   </style>
 </head>
@@ -116,10 +287,48 @@
   <div class="auth-card">
     <div class="logo">🔌</div>
     <h1 class="title">Authorize AgentSocket</h1>
+    <div id="sessionBadge" class="session-badge">
+      <span class="dot"></span>
+      <span id="sessionName">AgentSocket Task</span>
+    </div>
     <p class="description">
-      An external Agent is attempting to establish a local control session. 
-      Granting authorization will allow this agent to automate web pages inside secure <strong>"AgentSocket Task"</strong> tab groups.
+      An external Agent is attempting to establish a local automation session for <strong id="sessionTitleDesc">this task</strong>. 
+      Granting authorization will allow this agent to automate web pages inside its dedicated tab group.
     </p>
+
+    <!-- Planned Milestones Presentation Card (Spec 32) -->
+    <div class="milestones-card" id="milestonesCard">
+      <div class="milestones-header">
+        <span class="milestones-icon">🎯</span>
+        <span class="milestones-title">Planned Execution Milestones</span>
+      </div>
+      <div class="milestones-list" id="milestonesList">
+        <!-- Populated dynamically by auth.js -->
+      </div>
+    </div>
+
+    <div class="token-container">
+      <span class="token-label">Gateway Token:</span>
+      <code id="tokenDisplay" class="token-code" title="Ephemeral Gateway Token">verifying...</code>
+    </div>
+
+    <div class="permissions-container">
+      <label class="perm-row">
+        <input type="checkbox" id="enableSubskills" checked />
+        <span class="perm-label">
+          <strong>Subskills &amp; SOP Playbooks</strong>
+          <small>Allow agent to reference and record repeatable workflows</small>
+        </span>
+      </label>
+      <label class="perm-row">
+        <input type="checkbox" id="enableVision" />
+        <span class="perm-label">
+          <strong>Vision &amp; Screenshots</strong>
+          <small>Allow agent to capture viewport screenshots</small>
+        </span>
+      </label>
+    </div>
+
     <div class="btn-container">
       <button id="denyBtn" class="btn btn-deny">Deny</button>
       <button id="grantBtn" class="btn btn-grant">Grant Authorization</button>

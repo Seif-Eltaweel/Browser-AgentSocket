@@ -1,0 +1,55 @@
+{
+  "version": "2.1.0",
+  "updated_at": "2026-09-19T04:39:32Z",
+  "subskills": {
+    "linkedin-crm-enricher": {
+      "name": "linkedin-crm-enricher",
+      "display_title": "LinkedIn Personal CRM Profile Enricher",
+      "description": "Enriches LinkedIn profiles with 17-column CRM schema, experience trees, mutual connections, and activity status.",
+      "tags": [
+        "linkedin",
+        "crm",
+        "enrichment",
+        "lead-gen",
+        "experience",
+        "profile",
+        "connections"
+      ],
+      "vault_path": "server/subskills/linkedin-crm-enricher",
+      "subskill_file": "sub_skill.md",
+      "playbook_path": "server/subskills/linkedin-crm-enricher/sub_skill.md",
+      "adhoc_tools": [],
+      "times_borrowed": 5,
+      "times_referenced": 5,
+      "success_rate": 1.0,
+      "origin_session_id": "sess_20260821_084500_101",
+      "latest_session_id": "sess_20260821_084500_101",
+      "latest_session_path": "server/logs/2026-08-21/LinkedIn_CRM_Enricher_08-45_gid101",
+      "created_at": "2026-08-21T16:57:04Z",
+      "updated_at": "2026-09-16T05:00:00Z"
+    },
+    "example-sop": {
+      "name": "example-sop",
+      "display_title": "Example SOP Playbook",
+      "description": "Standard operating procedure demonstrating pure natural language markdown guidance with zero executable scripts.",
+      "tags": [
+        "example",
+        "sop",
+        "playbook",
+        "ooda"
+      ],
+      "vault_path": "server/subskills/example-sop",
+      "subskill_file": "sub_skill.md",
+      "playbook_path": "server/subskills/example-sop/sub_skill.md",
+      "adhoc_tools": [],
+      "times_borrowed": 15,
+      "times_referenced": 15,
+      "success_rate": 1.0,
+      "origin_session_id": null,
+      "latest_session_id": null,
+      "latest_session_path": null,
+      "created_at": "2026-09-16T05:00:00Z",
+      "updated_at": "2026-09-16T05:00:00Z"
+    }
+  }
+}

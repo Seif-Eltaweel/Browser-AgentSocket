@@ -56,9 +56,38 @@ specs/
 # AgentSocket Runtime Logs, Sessions & Artifacts (Keep private & uncommitted)
 server/logs/
 *.jsonl
+*.db
+*.db-wal
+*.db-shm
 .socket_server.pid
 *.pid
+.socket_server.token
+.socket_server.port
 *TIMELINE*.md
 *timeline*.md
+
+# Session-specific subskills, adhocs, and transient session files (Spec 18)
+**/session_manifest.json
+**/session*/adhocs/
+**/session*/sub_skill.md
+**/Session*/adhocs/
+**/Session*/sub_skill.md
+
+# Permanent Central Vaults (Spec 18 - Committed & Shared)
+!server/subskills/
+!server/subskills/**
+server/subskills/**/__pycache__/
+!server/adhocs/
+!server/adhocs/**
+
+# Local Task Automations & Ad-hoc Experiments
+tasks/
+tests/test_linkedin_crm.py
+
+# Personal Code Documentation
+seif_code_description/
+
+
+
 
 

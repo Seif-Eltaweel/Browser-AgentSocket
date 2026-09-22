@@ -22,31 +22,32 @@ This guide provides step-by-step instructions to install and configure **AgentSo
 Open your terminal and clone the repository:
 
 ```bash
-git clone https://github.com/Seif-Eltaweel/agentsocket-browser.git
-cd agentsocket-browser
+git clone https://github.com/Seif-Eltaweel/Browser-AgentSocket.git
+cd Browser-AgentSocket
 ```
 
-Create and activate a dedicated Python virtual environment:
-
-#### 🪟 Windows (PowerShell)
+Create and activate a dedicated Python virtual environm#### 🪟 Windows (PowerShell)
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+pip install -e .
+# or: pip install -r requirements.txt
 ```
 
 #### 🪟 Windows (Command Prompt)
 ```cmd
 python -m venv .venv
-.venv\Scripts\activate.bat
-pip install -r requirements.txt
+.\.venv\Scripts\activate.bat
+pip install -e .
+# or: pip install -r requirements.txt
 ```
 
 #### 🍎 macOS / 🐧 Linux
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -e .
+# or: pip install -r requirements.txt
 ```
 
 ---
@@ -61,7 +62,7 @@ AgentSocket requires the Manifest V3 Chrome Extension to link your active browse
    ```
 2. Enable **Developer mode** using the toggle in the top-right corner.
 3. Click the **Load unpacked** button in the top-left corner.
-4. Select the `extension/` directory inside your cloned `agentsocket-browser` folder.
+4. Select the `extension/` directory inside your cloned `Browser-AgentSocket` folder.
 5. You should see **AgentSocket** loaded with version `v1.1.0`.
 6. *(Recommended)* Click the Chrome Extensions puzzle piece icon on your toolbar and **pin AgentSocket** for easy status viewing.
 
@@ -72,7 +73,7 @@ AgentSocket requires the Manifest V3 Chrome Extension to link your active browse
 │ │ Load unpacked │ │ Pack extension│                             │
 │ └──────┬────────┘ └───────────────┘                             │
 │        ▼                                                        │
-│  Select: /path/to/agentsocket-browser/extension                 │
+│  Select: /path/to/Browser-AgentSocket/extension                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -80,7 +81,7 @@ AgentSocket requires the Manifest V3 Chrome Extension to link your active browse
 
 ### Step 3: Configure MCP Integration for Your AI Agent
 
-AgentSocket exposes native FastMCP tools (`socket_execute`, `socket_status`, `socket_release_takeover`, `socket_stop`, `socket_query_history`, `socket_get_session_details`, `socket_get_session_artifact`).
+AgentSocket exposes native FastMCP tools (`browser_observe`, `browser_click`, `browser_type`, `browser_scroll`, `browser_key_press`, `browser_screenshot`, `task_complete`, `browser_set_milestone`, `socket_status`, `socket_release_takeover`, `socket_stop`, `socket_query_history`, `socket_get_session_details`, `socket_get_session_artifact`, `socket_get_session_document`).
 
 Configure your agent environment with the snippets below:
 
@@ -92,21 +93,19 @@ Configure your agent environment with the snippets below:
 {
   "mcpServers": {
     "agentsocket": {
-      "command": "python",
-      "args": [
-        "/ABSOLUTE/PATH/TO/agentsocket-browser/server/socket_mcp.py"
-      ]
+      "command": "agentsocket",
+      "args": ["mcp"]
     }
   }
 }
 ```
-
-> **Windows Path Example**: `"C:/Users/username/agentsocket-browser/server/socket_mcp.py"` (use forward slashes `/`).
+*(Or with portable module execution: `command: "python", args: ["-m", "server.socket_mcp"]`)*
 
 #### Option B: Claude Code CLI
 Run in your terminal:
 ```bash
-claude mcp add agentsocket python /absolute/path/to/agentsocket-browser/server/socket_mcp.py
+claude mcp add agentsocket agentsocket mcp
+# or: claude mcp add agentsocket python -m server.socket_mcp
 ```
 
 #### Option C: Google Antigravity / Gemini CLI (`mcp_config.json`)
@@ -115,10 +114,8 @@ Add to your project root or global `mcp_config.json`:
 {
   "mcpServers": {
     "agentsocket": {
-      "command": "python",
-      "args": [
-        "/absolute/path/to/agentsocket-browser/server/socket_mcp.py"
-      ]
+      "command": "agentsocket",
+      "args": ["mcp"]
     }
   }
 }
@@ -128,7 +125,7 @@ Add to your project root or global `mcp_config.json`:
 In Cursor **Settings -> MCP**, click **Add New MCP Server**:
 * **Name:** `agentsocket`
 * **Type:** `command`
-* **Command:** `python /absolute/path/to/agentsocket-browser/server/socket_mcp.py`
+* **Command:** `agentsocket mcp` (or `python -m server.socket_mcp`)
 
 ---
 
@@ -138,13 +135,14 @@ Verify that the gateway, WebSocket bridge, and Chrome Extension communicate prop
 
 ```bash
 # 1. Plug in gateway and verify socket health
-python server/socket_launcher.py plug
+agentsocket plug
+# or: browser-socket plug (or python -m server.socket_launcher plug)
 
 # 2. Test URL navigation in active Chrome window
-python server/socket_launcher.py navigate "https://example.com"
+agentsocket navigate "https://example.com"
 
 # 3. Test JavaScript evaluation via CDP
-python server/socket_launcher.py eval "document.title"
+agentsocket eval "document.title"
 ```
 
 **Expected Output:**
@@ -162,7 +160,7 @@ python server/socket_launcher.py eval "document.title"
 ### Q1: `Extension disconnected` or `No active tab found`
 1. Ensure the extension is loaded at `chrome://extensions`.
 2. Click the extension popup icon in your toolbar and ensure the socket URL is set to `ws://127.0.0.1:8000/ws/extension`.
-3. If Chrome was closed, run `python server/socket_launcher.py plug` to auto-launch Chrome with the extension attached.
+3. If Chrome was closed, run `agentsocket plug` to auto-launch Chrome with the extension attached.
 
 ### Q2: Port 8000 is already in use
 * AgentSocket uses port `8000` by default. You can check the current process using port 8000:

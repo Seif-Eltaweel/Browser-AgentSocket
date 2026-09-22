@@ -128,7 +128,7 @@ server/logs/YYYY-MM-DD/<Session_Title>_<time>_gid<ID>/
 ├── sub_skill.md            # Reusable playbook rules, selectors & anti-bot SLA
 ├── input/                  # Input targets, CSVs, parameter lists
 ├── output/                 # Deliverables, structured JSON, scraped CSVs
-├── adhocs/                 # Ad-hoc Python scripts and one-off scrapers
+├── adhocs/                 # Legacy ad-hoc scripts (Spec 18; retired in Spec 38 in favor of OODA tools)
 └── artifacts/              # Screenshots and large offloaded payloads (>10KB)
 ```
 
@@ -196,7 +196,7 @@ python server/socket_launcher.py subskills borrow github-metrics-extractor \
 
 ## 4. Extending FastMCP Tools
 
-The Model Context Protocol (MCP) server is located in [`server/socket_mcp.py`](file:///c:/Users/20106/agent_bro_hands/server/socket_mcp.py).
+The Model Context Protocol (MCP) server is located in [`server/socket_mcp.py`](server/socket_mcp.py).
 
 To add a new tool for your AI agents, use the `@server.tool()` decorator:
 
@@ -222,12 +222,16 @@ def socket_custom_action(param1: str, param2: int = 10) -> dict:
 Ensure all unit and integration tests pass before submitting changes:
 
 ```bash
-# Run complete Python test suite
+# 1. Run linter checks
+ruff check server tests
+
+# 2. Run complete Python test suite
 python -m unittest discover tests
 
-# Run JavaScript protocol tests
+# 3. Run JavaScript protocol tests
 node tests/test_protocol.test.js
 
-# Verify launcher subskills CLI
-python server/socket_launcher.py subskills list
+# 4. Verify launcher subskills CLI
+agentsocket subskills list
+# or: python server/socket_launcher.py subskills list
 ```

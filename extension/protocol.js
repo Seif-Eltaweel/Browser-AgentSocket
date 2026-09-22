@@ -22,6 +22,12 @@
         // Gateway WebSocket <-> Extension
         EXECUTE_ACTION: "execute_action",
         COMMAND_RESPONSE: "command_response",
+        OBSERVE_PAGE: "observe_page",
+        OBSERVE_RESPONSE: "observe_response",
+        ACT_ELEMENT: "act_element",
+        ACT_RESPONSE: "act_response",
+        AUTH_REQUEST: "auth_request",
+        AUTH_RESPONSE: "auth_response",
         STATE_CHANGE: "state_change",
         STATE_SYNC: "state_sync",
         PING: "ping",
@@ -33,6 +39,10 @@
         SHOW_GLOW: "show_glow",
         SHOW_TAKEOVER: "show_takeover",
         HIDE_GLOW: "hide_glow",
+        UPDATE_PROGRESS: "update_progress",
+        SET_INTENT: "set_intent",
+        SET_PLAN: "set_plan",
+        SET_MILESTONE: "set_milestone",
 
         // Popup / Auth <-> Background
         GET_STATE: "get_state",
@@ -47,7 +57,19 @@
     const ActionTypes = Object.freeze({
         NAVIGATE: "navigate",
         EXECUTE_JS: "execute_js",
-        TASK_COMPLETE: "task_complete"
+        TASK_COMPLETE: "task_complete",
+        OBSERVE_PAGE: "observe_page",
+        ACT_ELEMENT: "act_element",
+        BROWSER_SCREENSHOT: "browser_screenshot"
+    });
+
+    // Hardened Security Headers & Auth Keys (Spec 22)
+    const AUTH_TOKEN_HEADER = "X-AgentSocket-Token";
+    const AUTH_TOKEN_PARAM = "token";
+
+    const SecurityHeaders = Object.freeze({
+        AUTH_TOKEN_HEADER,
+        AUTH_TOKEN_PARAM
     });
 
     const ControlModes = Object.freeze({
@@ -101,6 +123,9 @@
         ControlModes,
         ResponseStatus,
         ErrorCodes,
+        SecurityHeaders,
+        AUTH_TOKEN_HEADER,
+        AUTH_TOKEN_PARAM,
         createResponseEnvelope,
         createErrorEnvelope
     };

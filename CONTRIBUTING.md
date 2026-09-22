@@ -1,5 +1,7 @@
 # 🤝 Contributing to AgentSocket-Browser
 
+[![CI Pipeline](https://github.com/Seif-Eltaweel/Browser-AgentSocket/actions/workflows/ci.yml/badge.svg)](https://github.com/Seif-Eltaweel/Browser-AgentSocket/actions/workflows/ci.yml)
+
 Thank you for your interest in contributing to **AgentSocket-Browser**! We are committed to building a secure, high-performance, human-in-the-loop browser automation bridge for the AI agent ecosystem.
 
 This guide outlines our development workflow, architectural invariants, code quality standards, and pull request review process.
@@ -24,8 +26,8 @@ Follow these steps to set up your local development environment:
 
 ```bash
 # 1. Fork and clone the repository
-git clone https://github.com/YOUR_USERNAME/agentsocket-browser.git
-cd agentsocket-browser
+git clone https://github.com/YOUR_USERNAME/Browser-AgentSocket.git
+cd Browser-AgentSocket
 
 # 2. Create and activate a virtual environment
 python -m venv .venv
@@ -35,8 +37,9 @@ python -m venv .venv
 # macOS / Linux
 source .venv/bin/activate
 
-# 3. Install core dependencies
-pip install -r requirements.txt
+# 3. Install in editable mode with development dependencies
+pip install -e ".[dev]"
+# or: pip install -r requirements.txt
 
 # 4. Load the unpacked extension in Chrome
 # Navigate to chrome://extensions, enable "Developer mode", click "Load unpacked", and select extension/
@@ -75,30 +78,38 @@ We enforce the [Conventional Commits](https://www.conventionalcommits.org/) spec
 ### 4.1 Python Guidelines
 * **Style:** PEP 8 compliance.
 * **Typing:** Strict type annotations (`typing`, `Optional`, `Dict[str, Any]`, `List[str]`).
-* **Schemas:** All JSON inputs, WebSocket payloads, and event logs must use typed **Pydantic models** in [`server/models.py`](file:///c:/Users/20106/agent_bro_hands/server/models.py).
+* **Schemas:** All JSON inputs, WebSocket payloads, and event logs must use typed **Pydantic models** in [`server/models.py`](server/models.py).
 * **Process Safety:** Never use blocking sleeps in async FastAPI routes; use non-blocking event loops and timeouts.
 
 ### 4.2 JavaScript Guidelines (Chrome Extension)
 * **Manifest V3:** Adhere to Chrome Extension Manifest V3 service worker lifecycle standards.
 * **Zero Dependencies:** The extension (`extension/`) must remain lightweight with zero external npm runtime dependencies.
-* **Modularity:** Shared constants and envelope creators belong in [`extension/protocol.js`](file:///c:/Users/20106/agent_bro_hands/extension/protocol.js) using standard UMD format for cross-environment testing.
+* **Modularity:** Shared constants and envelope creators belong in [`extension/protocol.js`](extension/protocol.js) using standard UMD format for cross-environment testing.
 
 ---
 
 ## 5. Testing & Quality Gates
 
-Every Pull Request must pass 100% of test suites before merge:
+Every Pull Request must pass 100% of the CI verification matrix across Ubuntu, Windows, and macOS:
 
 ```bash
-# 1. Run complete Python test suite (44+ tests)
+# 1. Run Ruff linter and code quality checks
+ruff check server tests
+
+# 2. Run complete Python cross-platform test suite (171+ tests)
 python -m unittest discover tests
 
-# 2. Run JavaScript protocol validation tests
+# 3. Run all 5 Chrome Extension JavaScript test suites (Node.js 20+)
 node tests/test_protocol.test.js
+node tests/test_content_aria.test.js
+node tests/test_content_atomic_driver.test.js
+node tests/test_content_hud_ticker.test.js
+node tests/test_spec32_extension_hud.test.js
 
-# 3. Verify CLI subcommands
-python server/socket_launcher.py status
-python server/socket_launcher.py subskills list
+# 4. Verify distribution wheel build & CLI smoke test
+python -m build
+agentsocket --help
+browser-socket --help
 ```
 
 ---
