@@ -160,7 +160,7 @@ class TestVaultArchitecture(unittest.TestCase):
             manifest = self.manager.storage.read_manifest(s_dir)
             self.assertEqual(len(manifest.borrowed_subskills), 1)
             self.assertEqual(manifest.borrowed_subskills[0].name, "multi-tool-skill")
-            self.assertEqual(manifest.borrowed_subskills[0].referenced_adhocs, ["tool_a.py", "tool_b.py", "tool_c.py"])
+            self.assertEqual(sorted(manifest.borrowed_subskills[0].referenced_adhocs), ["tool_a.py", "tool_b.py", "tool_c.py"])
 
             # Verify adhocs directory in session contains ZERO copies of tool_a, tool_b, tool_c
             adhocs_dir = os.path.join(s_dir, "adhocs")

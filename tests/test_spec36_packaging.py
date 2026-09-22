@@ -61,7 +61,7 @@ class TestSpec36PackagingAndRuntime(unittest.TestCase):
     def test_db_path_environment_override(self):
         """Verify AGENTSOCKET_DB_PATH overrides database location."""
         with tempfile.TemporaryDirectory() as tmp:
-            custom_db = Path(tmp) / "custom_agentsocket.db"
+            custom_db = (Path(tmp) / "custom_agentsocket.db").resolve()
             with patch.dict(os.environ, {"AGENTSOCKET_DB_PATH": str(custom_db)}):
                 self.assertEqual(get_db_path(), custom_db)
                 self.assertTrue(custom_db.parent.exists())

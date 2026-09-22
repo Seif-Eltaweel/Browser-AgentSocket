@@ -60,7 +60,7 @@ jobs:
           AGENTSOCKET_STATE_DIR: ${{ runner.temp }}/agentsocket_test_state
           PYTHONUNBUFFERED: "1"
         run: |
-          python -m unittest discover tests
+          pytest -v
 
   test-extension:
     name: Chrome Extension JS Test Suites

@@ -320,7 +320,7 @@ class SubskillsManager:
         ]
         for c in candidates:
             if os.path.isdir(c):
-                return [f for f in os.listdir(c) if os.path.isfile(os.path.join(c, f))]
+                return sorted([f for f in os.listdir(c) if os.path.isfile(os.path.join(c, f))])
         return []
 
     # ========================================================================
