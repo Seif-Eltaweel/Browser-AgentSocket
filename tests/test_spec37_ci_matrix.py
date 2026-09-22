@@ -137,8 +137,20 @@ class TestSpec37CIMatrix(unittest.TestCase):
 
     def test_ruff_lint_passes_cleanly(self):
         """Verify ruff check server tests exits with returncode 0."""
+        import shutil
+
+        ruff_bin = shutil.which("ruff")
+        if ruff_bin:
+            cmd = [ruff_bin, "check", "server", "tests"]
+        else:
+            try:
+                import ruff  # noqa: F401
+                cmd = [sys.executable, "-m", "ruff", "check", "server", "tests"]
+            except ImportError:
+                self.skipTest("Ruff is not installed in the current environment")
+
         res = subprocess.run(
-            [sys.executable, "-m", "ruff", "check", "server", "tests"],
+            cmd,
             cwd=str(REPO_ROOT),
             capture_output=True,
             text=True,
