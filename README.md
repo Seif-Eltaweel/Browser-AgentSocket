@@ -1,14 +1,26 @@
-# AgentSocket-Browser 🔌⚡
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="assets/logo-light.png">
+    <img alt="AgentSocket-Browser Logo" src="assets/logo.png" width="240" />
+  </picture>
+</p>
 
-**Autonomous Multi-Agent Browser Automation Gateway, FastMCP Server & Chrome MV3 Extension Bridge.**
+<h1 align="center">AgentSocket-Browser 🔌⚡</h1>
 
-[![Python Version](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-blue.svg)](https://www.python.org/)
-[![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
-[![CI Pipeline](https://github.com/Seif-Eltaweel/Browser-AgentSocket/actions/workflows/ci.yml/badge.svg)](https://github.com/Seif-Eltaweel/Browser-AgentSocket/actions/workflows/ci.yml)
-[![Chrome MV3](https://img.shields.io/badge/Chrome-Manifest%20V3-orange.svg)](extension/manifest.json)
-[![FastMCP](https://img.shields.io/badge/MCP-FastMCP%20Ready-purple.svg)](server/socket_mcp.py)
-[![Docker Support](https://img.shields.io/badge/Docker-Ready%20%28Xvfb%29-blue.svg)](Dockerfile)
-[![Test Suite](https://img.shields.io/badge/tests-171%2F171%20passing-brightgreen.svg)](tests/)
+<p align="center">
+  <strong>Autonomous Multi-Agent Browser Automation Gateway, FastMCP Server & Chrome MV3 Extension Bridge.</strong>
+</p>
+
+<p align="center">
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-blue.svg" alt="Python Version" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-green.svg" alt="License" /></a>
+  <a href="https://github.com/Seif-Eltaweel/Browser-AgentSocket/actions/workflows/ci.yml"><img src="https://github.com/Seif-Eltaweel/Browser-AgentSocket/actions/workflows/ci.yml/badge.svg" alt="CI Pipeline" /></a>
+  <a href="extension/manifest.json"><img src="https://img.shields.io/badge/Chrome-Manifest%20V3-orange.svg" alt="Chrome MV3" /></a>
+  <a href="server/socket_mcp.py"><img src="https://img.shields.io/badge/MCP-FastMCP%20Ready-purple.svg" alt="FastMCP" /></a>
+  <a href="Dockerfile"><img src="https://img.shields.io/badge/Docker-Ready%20%28Xvfb%29-blue.svg" alt="Docker Support" /></a>
+  <a href="tests/"><img src="https://img.shields.io/badge/tests-171%2F171%20passing-brightgreen.svg" alt="Test Suite" /></a>
+</p>
 
 AgentSocket-Browser is a secure, human-in-the-loop browser automation bridge that connects autonomous AI agents (such as **Claude Code**, **Antigravity**, **Cursor**, **Windsurf**, or custom Python agents) directly to your active browser session. Operating through native **Model Context Protocol (MCP)** and WebSocket streams, it pairs zero-friction on-demand startup (`plug`) with strict safety guardrails, **Shadow DOM-isolated HUD**, viewport interaction shielding, tab group session isolation, and seamless human-agent takeover workflows.
 
