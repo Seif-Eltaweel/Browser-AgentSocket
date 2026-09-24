@@ -2,11 +2,11 @@
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.png">
     <source media="(prefers-color-scheme: light)" srcset="assets/logo-light.png">
-    <img alt="AgentSocket-Browser Logo" src="assets/logo.png" width="240" />
+    <img alt="Browser-AgentSocket Logo" src="assets/logo.png" width="240" />
   </picture>
 </p>
 
-<h1 align="center">AgentSocket-Browser 🔌⚡</h1>
+<h1 align="center">Browser-AgentSocket 🔌⚡</h1>
 
 <p align="center">
   <strong>Autonomous Multi-Agent Browser Automation Gateway, FastMCP Server & Chrome MV3 Extension Bridge.</strong>
@@ -22,7 +22,7 @@
   <a href="tests/"><img src="https://img.shields.io/badge/tests-171%2F171%20passing-brightgreen.svg" alt="Test Suite" /></a>
 </p>
 
-AgentSocket-Browser is a secure, human-in-the-loop browser automation bridge that connects autonomous AI agents (such as **Claude Code**, **Antigravity**, **Cursor**, **Windsurf**, or custom Python agents) directly to your active browser session. Operating through native **Model Context Protocol (MCP)** and WebSocket streams, it pairs zero-friction on-demand startup (`plug`) with strict safety guardrails, **Shadow DOM-isolated HUD**, viewport interaction shielding, tab group session isolation, and seamless human-agent takeover workflows.
+Browser-AgentSocket is a secure, human-in-the-loop browser automation bridge that connects autonomous AI agents (such as **Claude Code**, **Antigravity**, **Cursor**, **Hermes Agent**, or custom Python agents) directly to your active browser session. Operating through native **Model Context Protocol (MCP)** and WebSocket streams, it pairs zero-friction on-demand startup (`plug`) with strict safety guardrails, **Shadow DOM-isolated HUD**, viewport interaction shielding, tab group session isolation, and seamless human-agent takeover workflows.
 
 ---
 
@@ -192,7 +192,7 @@ agentsocket eval "document.title"
 
 ## ⚙️ MCP Agent Configuration
 
-Add AgentSocket-Browser to your AI agent's configuration:
+Add Browser-AgentSocket to your AI agent's configuration:
 
 ### Claude Desktop (`claude_desktop_config.json`)
 ```json
@@ -323,4 +323,4 @@ node tests/test_protocol.test.js
 
 This project is licensed under the **Apache License 2.0**. See the [LICENSE](LICENSE) file for details.
 
-Copyright © 2026 Seif Eltaweel and AgentSocket-Browser Contributors.
+Copyright © 2026 Seif Eltaweel and Browser-AgentSocket Contributors.
